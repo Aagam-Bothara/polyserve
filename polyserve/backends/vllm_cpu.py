@@ -30,11 +30,7 @@ class VllmCpuBackend(VllmBackend):
         return ["bf16"]
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
-        return MemoryModel(
-            runtime_workspace=self.runtime_workspace_bytes,
-            kv_tokens_fn=lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION),
-            device="cpu",
-        )
+        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "cpu")
 
     def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
         ctxs = [c for c in ctx_grid(model.arch.max_position_embeddings, min_ctx) if c <= 8192] or ctx_grid(

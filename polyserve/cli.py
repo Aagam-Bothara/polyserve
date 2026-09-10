@@ -312,6 +312,41 @@ def report(
     console.print(f"[dim]wrote {md} and {svg}[/]")
 
 
+@app.command("memory-report")
+def memory_report(
+    results: Optional[Path] = typer.Option(None, "--results", help="compare results dir (default benchmarks/results)"),
+    apply: bool = typer.Option(False, "--apply", help="Write fitted workspace/margin to ~/.polyserve/memory-model.json"),
+    all_machines: bool = typer.Option(False, "--all", help="Include profiles/results from other hardware hashes"),
+) -> None:
+    """Planner prediction vs measured peak memory across cached profiles and compare results."""
+    from polyserve import cache as profile_cache
+    from polyserve import memcal
+    from polyserve.bench.compare import ComparisonResult
+    from polyserve.bench.report import load_results
+    from polyserve.hardware import hardware_hash, probe as _probe
+    from polyserve.models import TrialResult
+
+    hw = _probe()
+    hh = hardware_hash(hw)
+    obs = []
+    for _, p in profile_cache.list_profiles():
+        if all_machines or p.hardware_hash == hh:
+            obs += memcal.observations_from_trials(p.calibration_table, p.hardware_hash)
+    for r in load_results(results):
+        if all_machines or r.hardware_hash == hh:
+            trials = [TrialResult(config=row.config, stage=row.label, metrics=row.metrics, launched=row.ok or row.error is None,
+                                  error=row.error, memory=row.memory) for row in r.rows if row.memory is not None]
+            obs += memcal.observations_from_trials(trials, r.hardware_hash)
+    cals = memcal.analyse(obs)
+    console.print(memcal.render_markdown(cals, hardware=None if all_machines else (hw.gpu.name if hw.gpu else hw.cpu.model_name)))
+    if apply:
+        if all_machines:
+            err.print("[red]--apply needs this machine's observations only; drop --all[/]")
+            raise typer.Exit(2)
+        path = memcal.save_overrides(hh, cals)
+        console.print(f"[green]wrote {path}[/]; the planner now uses these constants for hardware {hh}")
+
+
 @app.command()
 def profiles() -> None:
     """List cached profiles."""

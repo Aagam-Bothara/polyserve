@@ -19,7 +19,16 @@ from polyserve.backends.base import BaseBackend, free_port
 from polyserve.calibrate.measure import run_trial
 from polyserve.calibrate.objectives import Constraints, pick
 from polyserve.calibrate.workload import Workload
-from polyserve.models import Config, HardwareDescriptor, PreparedModel, TrialMetrics, TrialResult
+from polyserve.memlog import device_used_mb, merge, parse_log
+from polyserve.memory import estimate as memory_estimate
+from polyserve.models import (
+    Config,
+    HardwareDescriptor,
+    MemoryObservation,
+    PreparedModel,
+    TrialMetrics,
+    TrialResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,13 @@ class SubprocessTrialRunner:
         self.startup_timeout = startup_timeout
         self.request_timeout = request_timeout
 
+    def _predict(self, cfg: Config, backend: BaseBackend, model: PreparedModel):
+        try:
+            return memory_estimate(self.hw, model, cfg, backend.memory_model(self.hw))
+        except Exception as exc:
+            logger.debug("no memory estimate for %s: %s", cfg.key(), exc)
+            return None
+
     def run(self, cfg: Config, stage: str) -> TrialResult:
         backend = self.backends[cfg.backend]
         model = self.models[cfg.backend]
@@ -59,27 +75,35 @@ class SubprocessTrialRunner:
         if self.log_dir:
             safe = cfg.key().replace("/", "_")
             log_path = self.log_dir / f"{int(time.time())}_{safe}.log"
+        hooks = backend.workload_hooks(self.hw, model)
+        observation = MemoryObservation(predicted=self._predict(cfg, backend, model))
+        baseline_mb = device_used_mb(hooks.gpu_ids)
         proc = None
         try:
             proc = backend.launch(cfg, model, port, log_path=log_path)
             if not proc.wait_ready(timeout=self.startup_timeout):
                 tail = proc.tail_log(20)
+                observation.measured = parse_log(cfg.backend, proc.tail_log(400))
                 return TrialResult(
                     config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                    error=f"failed to start (rc={proc.returncode()})\n{tail}",
+                    error=f"failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
                 )
-            hooks = backend.workload_hooks(self.hw, model)
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout,
             )
+            observation.measured = merge(
+                parse_log(cfg.backend, proc.tail_log(400)), metrics.peak_mem_mb, baseline_mb,
+                metrics.telemetry_source,
+            )
             err = None
             if not metrics.ok:
                 err = f"{metrics.failed}/{metrics.requests} requests failed"
-            return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err)
+            return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err, memory=observation)
         except Exception as exc:
             logger.exception("trial %s crashed", cfg.key())
-            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False, error=str(exc))
+            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False, error=str(exc),
+                               memory=observation)
         finally:
             if proc is not None:
                 proc.stop()

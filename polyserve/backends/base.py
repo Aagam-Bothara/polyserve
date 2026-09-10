@@ -217,6 +217,23 @@ class BaseBackend:
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         raise NotImplementedError
 
+    def calibrated_memory(self, hw: HardwareDescriptor, kv_tokens_fn, device: str) -> MemoryModel:
+        """MemoryModel using this machine's fitted workspace/margin when `polyserve memory-report --apply` ran."""
+        from polyserve.hardware import hardware_hash
+        from polyserve.memcal import margin_override, workspace_override
+        from polyserve.memory import DEFAULT_MARGIN_FRACTION
+
+        hh = hardware_hash(hw)
+        ws = workspace_override(hh, self.name)
+        mf = margin_override(hh, self.name)
+        return MemoryModel(
+            runtime_workspace=ws if ws is not None else self.runtime_workspace_bytes,
+            kv_tokens_fn=kv_tokens_fn,
+            device=device,
+            margin_fraction=mf if mf is not None else DEFAULT_MARGIN_FRACTION,
+            calibrated=ws is not None or mf is not None,
+        )
+
     def estimate_memory(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> int:
         from polyserve.memory import estimate
 

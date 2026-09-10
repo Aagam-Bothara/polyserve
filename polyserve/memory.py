@@ -16,11 +16,12 @@ logger = logging.getLogger(__name__)
 
 BUDGET_FRACTION = 0.95
 MIN_SAFETY_MARGIN = 512 * MiB
+DEFAULT_MARGIN_FRACTION = 0.05
 
 
-def safety_margin(available: int) -> int:
-    """5% or 512 MB, whichever is larger."""
-    return max(int(0.05 * available), MIN_SAFETY_MARGIN)
+def safety_margin(available: int, fraction: float = DEFAULT_MARGIN_FRACTION) -> int:
+    """`fraction` of available (default 5%) or 512 MB, whichever is larger."""
+    return max(int(fraction * available), MIN_SAFETY_MARGIN)
 
 
 def kv_cache_bytes(model: PreparedModel, cfg: Config, kv_tokens: int) -> int:
@@ -31,10 +32,13 @@ def kv_cache_bytes(model: PreparedModel, cfg: Config, kv_tokens: int) -> int:
 class MemoryModel:
     """Backend-provided knobs for the generic estimator."""
 
-    def __init__(self, runtime_workspace: int, kv_tokens_fn, device: str = "gpu"):
+    def __init__(self, runtime_workspace: int, kv_tokens_fn, device: str = "gpu",
+                 margin_fraction: float = DEFAULT_MARGIN_FRACTION, calibrated: bool = False):
         self.runtime_workspace = runtime_workspace
         self.kv_tokens_fn = kv_tokens_fn  # Config -> int tokens resident in KV cache
         self.device = device  # "gpu" | "cpu"
+        self.margin_fraction = margin_fraction
+        self.calibrated = calibrated  # constants came from measured trials on this machine
 
 
 def estimate(
@@ -55,7 +59,7 @@ def estimate(
 
     if available is None:
         available = hw.gpu.vram_free_bytes if (mm.device == "gpu" and hw.gpu) else hw.cpu.ram_free_bytes
-    margin = safety_margin(available)
+    margin = safety_margin(available, mm.margin_fraction)
     total = weights + kv + mm.runtime_workspace + margin
 
     # vLLM/SGLang cap their own allocation at gpu_memory_utilization x total VRAM.

@@ -156,12 +156,31 @@ def render_markdown(summary: Summary) -> str:
             f"{_f(c.joules_gain_pct, 0, True)}% | {_f(c.polyserve.calibration_seconds)}s / {c.polyserve.calibration_trials} |"
         )
     lines += ["", "⚠ = baseline or PolyServe missed the workload's TTFT SLO in that run; not counted in the headline.", ""]
+    lines += [memory_section(summary), ""]
     lines += ["## Per-combination detail", ""]
     from polyserve.bench.compare import to_markdown
 
     for c in summary.combos:
         lines += [to_markdown(c.result), ""]
     return "\n".join(lines)
+
+
+def memory_section(summary: Summary) -> str:
+    """Planner accuracy over every row in every result (each compare row carries its observation)."""
+    from polyserve import memcal
+    from polyserve.models import TrialResult
+
+    trials = []
+    for c in summary.combos:
+        for row in c.result.rows:
+            if row.memory is not None:
+                trials.append((TrialResult(config=row.config, stage=row.label, metrics=row.metrics,
+                                           launched=row.ok or row.error is None, error=row.error, memory=row.memory),
+                               c.result.hardware_hash))
+    obs = []
+    for t, hh in trials:
+        obs += memcal.observations_from_trials([t], hh)
+    return memcal.render_markdown(memcal.analyse(obs))
 
 
 # --------------------------------------------------------------------------- plot

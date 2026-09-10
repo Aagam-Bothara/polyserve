@@ -84,11 +84,7 @@ class VllmBackend(BaseBackend):
     # ---- memory
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
-        return MemoryModel(
-            runtime_workspace=self.runtime_workspace_bytes,
-            kv_tokens_fn=lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION),
-            device="gpu",
-        )
+        return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "gpu")
 
     # ---- configs
 

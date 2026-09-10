@@ -213,6 +213,13 @@ class TrialMetrics(BaseModel):
         return self.requests > 0 and self.failed == 0 and self.output_tokens > 0
 
 
+class MemoryObservation(BaseModel):
+    """Planner prediction next to what the backend actually allocated, for one trial."""
+
+    predicted: Optional[MemoryEstimate] = None
+    measured: Optional["MeasuredMemory"] = None
+
+
 class TrialResult(BaseModel):
     config: Config
     stage: str
@@ -220,10 +227,16 @@ class TrialResult(BaseModel):
     launched: bool = True
     error: Optional[str] = None
     started_at: float = Field(default_factory=time.time)
+    memory: Optional[MemoryObservation] = None
 
     @property
     def ok(self) -> bool:
         return self.launched and self.error is None and self.metrics.ok
+
+
+from polyserve.memlog import MeasuredMemory  # noqa: E402  (after MemoryEstimate is defined)
+
+MemoryObservation.model_rebuild()
 
 
 class Profile(BaseModel):

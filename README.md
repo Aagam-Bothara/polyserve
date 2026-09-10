@@ -52,7 +52,7 @@ flowchart LR
 2. **Select** — the rules in the table above. Multiple candidates are allowed; calibration picks the winner.
 3. **Prepare** — vLLM/SGLang use HF weights as-is. llama.cpp resolves a pre-quantised GGUF from the Hub (Q4_K_M, Q5_K_M, Q6_K, Q8_0), or converts + quantises FP16 itself, and only for the quants the planner keeps.
 4. **Memory planner** — before any process is launched:
-   `estimated = weights + kv_cache(ctx, batch, dtype) + runtime_workspace + safety_margin`, keep a config only if `estimated ≤ 0.95 × available`. This prunes the grid from ~144 points to a dozen. (`polyserve plan <model>`)
+   `estimated = weights + kv_cache(ctx, batch, dtype) + runtime_workspace + safety_margin`, keep a config only if `estimated ≤ 0.95 × available`. This prunes the grid from ~144 points to a dozen. (`polyserve plan <model>`) The planner is **calibrated against itself**: every trial records the prediction next to the measured peak (NVML) and the backend's own weight / KV / workspace figures from its log; `polyserve memory-report` prints the prediction error per backend and `--apply` replaces the hand-set workspace constant and 5% margin with fitted values for this machine.
 5. **Calibrate** — a staged search, not a grid: (1) one short run per quant, keep the top two; (2) largest safe memory config; (3) batch / concurrency sweep. Each trial replays a fixed synthetic workload (16 prompts × 256-token prefill × 128-token decode at concurrency 1/4/8, ~10 s) and is measured with [llmtrace](https://github.com/Aagam-Bothara/llmtrace): tok/s, TTFT, TPOT, peak memory, GPU utilisation, power.
 6. **Cache** — `~/.polyserve/profiles/<hardware_hash>/<model>/<objective>[-<workload>].json` holds the winner, the full launch args, the whole calibration table, and versions. Invalidated when the hardware or backend version changes; `polyserve recalibrate` forces a rerun.
 7. **Serve** — the winner runs as a supervised subprocess (health check + auto-restart). A thin proxy on `:8000` exposes `/v1/chat/completions`, `/v1/completions`, `/v1/models` (streaming passthrough) and `/polyserve/profile`, which returns the active configuration and calibration table.
@@ -105,6 +105,7 @@ polyserve recalibrate <model>   # force a rerun and overwrite the cached profile
 polyserve profiles              # list cached profiles
 polyserve compare <model>       # PolyServe's pick vs stock defaults vs Ollama, one workload -> results JSON
 polyserve report                # aggregate results: median gain over the best SLO-meeting default + plot
+polyserve memory-report [--apply]  # planner prediction vs measured peak memory; --apply fits workspace + margin
 ```
 
 `--skip-calibration` serves the first candidate backend with sane defaults immediately; nothing is cached.

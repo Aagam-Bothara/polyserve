@@ -22,7 +22,15 @@ from polyserve.calibrate.objectives import Constraints
 from polyserve.calibrate.search import SubprocessTrialRunner, TrialRunner
 from polyserve.calibrate.workload import Workload, get_workload
 from polyserve.hardware import hardware_hash
-from polyserve.models import Config, HardwareDescriptor, ModelSpec, PreparedModel, Profile, TrialMetrics
+from polyserve.models import (
+    Config,
+    HardwareDescriptor,
+    MemoryObservation,
+    ModelSpec,
+    PreparedModel,
+    Profile,
+    TrialMetrics,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +45,7 @@ class ComparisonRow(BaseModel):
     ok: bool = False
     error: Optional[str] = None
     metrics: TrialMetrics = Field(default_factory=TrialMetrics)
+    memory: Optional[MemoryObservation] = None
     # Objective-relevant view: the concurrency level the objective would run this row at.
     scored_concurrency: Optional[int] = None
     scored_tok_s: Optional[float] = None
@@ -168,7 +177,7 @@ def compare(
         except Exception:
             pass
         tr = runner.run(cfg, f"compare:{label}")
-        row.ok, row.error, row.metrics = tr.ok, tr.error, tr.metrics
+        row.ok, row.error, row.metrics, row.memory = tr.ok, tr.error, tr.metrics, tr.memory
         _score_row(row, objective, cons)
         if progress:
             progress(label, row)

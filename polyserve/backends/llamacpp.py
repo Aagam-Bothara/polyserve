@@ -91,11 +91,7 @@ class LlamaCppBackend(BaseBackend):
     # ---- memory: llama-server allocates the full KV for -c up front (per-slot ctx x n_parallel)
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
-        return MemoryModel(
-            runtime_workspace=self.runtime_workspace_bytes,
-            kv_tokens_fn=lambda cfg: cfg.ctx * cfg.batch,
-            device="gpu" if self.cuda else "cpu",
-        )
+        return self.calibrated_memory(hw, lambda cfg: cfg.ctx * cfg.batch, "gpu" if self.cuda else "cpu")
 
     # ---- configs
 
