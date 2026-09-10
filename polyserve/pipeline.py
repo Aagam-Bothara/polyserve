@@ -164,7 +164,10 @@ def calibrate(
             workload=workload,
             log_dir=log_dir or (profile_cache.logs_dir() / spec.safe_id),
         )
-    search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress)
+    from polyserve.predict import Predictor
+
+    search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
+                          predictor=Predictor(hw), models=plan.prepared, workload=workload)
     t0 = time.monotonic()
     winner, notes = search.run(feasible)
     if winner is None:

@@ -148,8 +148,33 @@ class StagedSearch:
     top_quants: int = 2
     max_memory_trials_per_quant: int = 3
     progress: Optional[ProgressFn] = None
+    # Optional performance predictor (polyserve.predict.Predictor) + the models it needs.
+    predictor: Optional[object] = None
+    models: Dict[str, PreparedModel] = field(default_factory=dict)
+    workload: Optional[Workload] = None
+    prune_below: float = 0.4  # skip a quant whose predicted best tok/s < this fraction of the best predicted
     results: List[TrialResult] = field(default_factory=list)
+    notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
+
+    # ---- predictor helpers
+
+    def _predicted_tok_s(self, cfg: Config) -> Optional[float]:
+        """Predicted best-level tok/s under the objective's TTFT ceiling, or None if unavailable/unfitted."""
+        if self.predictor is None or cfg.backend not in self.models:
+            return None
+        try:
+            if not self.predictor.is_fitted(cfg.backend):  # type: ignore[attr-defined]
+                return None
+            wl = self.workload or Workload()
+            ceiling = self.constraints.ttft_ceiling_ms if self.objective == "balanced" else None
+            p = self.predictor.best_level(  # type: ignore[attr-defined]
+                self.models[cfg.backend], cfg, wl.prefill_tokens, wl.decode_tokens, wl.concurrencies, ceiling
+            )
+            return float(p.tok_s)
+        except Exception as exc:
+            logger.debug("predictor failed for %s: %s", cfg.key(), exc)
+            return None
 
     # ---- helpers
 
@@ -176,6 +201,21 @@ class StagedSearch:
         groups: Dict[Tuple[str, str], List[Config]] = {}
         for c in feasible:
             groups.setdefault((c.backend, c.quant), []).append(c)
+        # Predictor-guided pruning: skip (backend, quant) groups predicted far below the best group.
+        predicted: Dict[Tuple[str, str], float] = {}
+        for key, group in groups.items():
+            p = self._predicted_tok_s(_baseline(group))
+            if p is not None:
+                predicted[key] = p
+        if predicted:
+            best_pred = max(predicted.values())
+            for key, p in predicted.items():
+                if p < self.prune_below * best_pred:
+                    self.notes.append(
+                        f"skipped {key[0]}/{key[1]}: predicted {p:.0f} tok/s < {self.prune_below:.0%} of best "
+                        f"predicted {best_pred:.0f}"
+                    )
+                    groups.pop(key, None)
         stage_results: Dict[Tuple[str, str], TrialResult] = {}
         for key, group in groups.items():
             # Largest memory setting first; step down only if the launch itself fails.
@@ -237,7 +277,12 @@ class StagedSearch:
                 and c.ctx == mem_cfg.ctx
                 and _memory_knob(c) == _memory_knob(mem_cfg)
             ]
-            variants.sort(key=lambda c: (c.batch, c.n_batch or 0))
+            # Try the batch settings the predictor likes best first, so an interrupted run has the winner.
+            preds = {c.key(): self._predicted_tok_s(c) for c in variants}
+            if all(v is not None for v in preds.values()):
+                variants.sort(key=lambda c: -preds[c.key()])
+            else:
+                variants.sort(key=lambda c: (c.batch, c.n_batch or 0))
             for c in variants:
                 self._run(c, "batch")
 
@@ -254,4 +299,4 @@ class StagedSearch:
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
         winner, notes = pick(self.results, self.objective, self.constraints)
-        return winner, notes
+        return winner, self.notes + notes

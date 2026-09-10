@@ -312,6 +312,76 @@ def report(
     console.print(f"[dim]wrote {md} and {svg}[/]")
 
 
+@app.command()
+def predict(
+    model: str,
+    workload: str = WORKLOAD_OPT,
+    backend: Optional[str] = typer.Option(None, "--backend"),
+    top: int = typer.Option(20, "--top", help="Rows to show"),
+) -> None:
+    """Predict tok/s and TTFT for every feasible config without launching anything."""
+    from polyserve.hardware import hardware_hash, probe as _probe
+    from polyserve.pipeline import prepare_and_plan, select
+    from polyserve.predict import Predictor
+
+    wl = _workload(workload)
+    hw = _probe()
+    spec = ModelSpec(hf_id=model)
+    candidates, reg = select(hw, spec, force=backend)
+    if not candidates:
+        err.print("[red]no candidate backends for this machine/model[/]")
+        raise typer.Exit(2)
+    planned = prepare_and_plan(hw, spec, candidates, reg, workload=wl)
+    pred = Predictor(hw)
+    rows = []
+    for name, cfgs in planned.feasible.items():
+        for cfg, _ in cfgs:
+            p = pred.best_level(planned.prepared[name], cfg, wl.prefill_tokens, wl.decode_tokens, wl.concurrencies,
+                                wl.ttft_ceiling_ms)
+            rows.append((cfg, p))
+    rows.sort(key=lambda r: -r[1].tok_s)
+    d = pred.dev
+    console.print(f"[bold]{d.name}[/]: {d.mem_bw_gbs:.0f} GB/s, {d.tflops:.0f} TFLOPS"
+                  f"{'' if d.known else ' (estimated)'}   workload {wl.name}   hardware {hardware_hash(hw)}")
+    t = Table(title=f"Predicted ({len(rows)} feasible configs, top {top})")
+    for col in ("config", "pred tok/s", "@c", "pred TTFT ms", "pred TPOT ms", "bound", "params"):
+        t.add_column(col, justify="left" if col in ("config", "bound", "params") else "right", overflow="fold",
+                     min_width=(40 if col == "config" else None))
+    for cfg, p in rows[:top]:
+        t.add_row(cfg.key(), f"{p.tok_s:.0f}", str(p.concurrency), f"{p.ttft_ms:.0f}", f"{p.tpot_ms:.1f}",
+                  "memory" if p.memory_bound else "compute", "fitted" if p.fitted else "prior")
+    console.print(t)
+    if not any(p.fitted for _, p in rows):
+        err.print("[dim]no fitted parameters for this machine yet; run `polyserve fit` after a calibration[/]")
+
+
+@app.command()
+def fit(
+    apply: bool = typer.Option(False, "--apply", help="Write fitted parameters to ~/.polyserve/perf-model.json"),
+    all_machines: bool = typer.Option(False, "--all", help="Report every machine's profiles (no --apply)"),
+) -> None:
+    """Fit the performance predictor from cached calibration profiles; report leave-one-out accuracy."""
+    from polyserve import cache as profile_cache
+    from polyserve import predict as P
+    from polyserve.hardware import hardware_hash, probe as _probe
+
+    hw = _probe()
+    hh = hardware_hash(hw)
+    dev = P.device_spec(hw)
+    obs = []
+    for _, p in profile_cache.list_profiles():
+        if all_machines or p.hardware_hash == hh:
+            obs += P.observations_from_profile(p)
+    evals = P.fit_all(obs, dev)
+    console.print(P.render_markdown(evals, dev))
+    if apply:
+        if all_machines:
+            err.print("[red]--apply needs this machine's profiles only; drop --all[/]")
+            raise typer.Exit(2)
+        path = P.save_params(hh, {b: e.params for b, e in evals.items()})
+        console.print(f"[green]wrote {path}[/]; calibration on hardware {hh} now prunes with these parameters")
+
+
 @app.command("memory-report")
 def memory_report(
     results: Optional[Path] = typer.Option(None, "--results", help="compare results dir (default benchmarks/results)"),
@@ -321,7 +391,6 @@ def memory_report(
     """Planner prediction vs measured peak memory across cached profiles and compare results."""
     from polyserve import cache as profile_cache
     from polyserve import memcal
-    from polyserve.bench.compare import ComparisonResult
     from polyserve.bench.report import load_results
     from polyserve.hardware import hardware_hash, probe as _probe
     from polyserve.models import TrialResult

@@ -75,11 +75,62 @@ The floor defaults to 50% of the best tok/s observed in the same calibration, so
 
 Why efficiency is its own objective rather than a tie-breaker: on the same GPU, J/token varies by 2–3× across batch sizes because idle power is amortised over more tokens at higher concurrency, while TTFT gets worse. `efficiency` picks the point on that curve that still meets a throughput floor. Whether that is the same point `balanced` picks is an empirical question the benchmark table answers per machine.
 
-## 5. Caching and reproducibility
+## 5. Calibrating the planner against itself
+
+The memory planner is a formula; the question is how wrong it is. Every trial now records the
+planner's estimate (weights + KV + workspace, before the safety margin) next to two measurements:
+the NVML peak during the trial minus what the device held before launch, and the backend's own
+accounting parsed from its startup log (vLLM prints weights, non-KV total and available KV cache;
+llama-server prints model, KV and compute buffer sizes per device; SGLang prints weight and KV
+pool sizes). `polyserve memory-report` reduces these to, per backend: mean absolute % error,
+signed bias, the worst under-prediction, component-wise error for weights and KV, and the number of
+OOMs among planner-feasible configs. That last number is the one the planner is judged on: a
+config the planner admitted that then OOMed is a planner failure, whatever the average error says.
+
+Two constants are then fitted rather than assumed. `runtime_workspace`, the only hand-set term,
+becomes the 95th percentile of measured workspace on this machine. The safety margin becomes the
+worst observed under-prediction plus 2%, clamped to [2%, 15%], with the 512 MB floor kept.
+`--apply` writes both to `~/.polyserve/memory-model.json` keyed by hardware hash and the planner
+uses them from then on. The claim the matrix is meant to support is therefore checkable:
+"predicts peak device memory within X% across N GPUs, with zero OOMs among the configs it admitted".
+
+## 6. A performance predictor for the search
+
+Measuring is the ground truth, but a search that must launch an engine to learn anything is slow
+(vLLM start-up dominates at two to three minutes a trial). A predictor that ranks configs before
+launch lets the search skip what cannot win. The model is a roofline, not a learned black box:
+
+```
+decode step, n sequences in flight:
+    t_mem  = (device_weights + n · kv_bytes/token · (L_p + L_d/2)) / (α · mem_bw)
+    t_comp = n · 2 · params / (β · peak_flops)
+    t_step = max(t_mem, t_comp) + overhead
+prefill (compute bound):  t_pre = n · L_p · 2 · params / (β · peak_flops) + device_weights / (α · mem_bw)
+wave:   t_wave = t_pre + L_d · t_step        tok/s = n · L_d / t_wave
+own prefill (chunked prefill interleaves requests): t_own = L_p · 2 · params / (β · peak_flops)
+TTFT p50 with c clients and B slots (n = min(c, B)):  t_own + ⌊(c/2)/n⌋ · t_wave
+```
+
+Device peak bandwidth and FLOPS come from a small table keyed on the NVML name; the three
+parameters per backend (α bandwidth efficiency, β compute efficiency, per-step overhead) are fitted
+by grid search on log error from the machine's own calibration trials, one observation per
+(config, concurrency level). `polyserve fit` reports leave-one-trial-out MAPE for tok/s and TTFT
+and the Spearman rank correlation between predicted and measured tok/s, which is the number that
+matters: pruning is safe when the ranking is right even if the magnitudes are off.
+
+The search uses it conservatively. With fitted parameters, stage 1 skips a (backend, quant) group
+whose predicted best is below 40% of the best predicted group, and stage 3 tries batch settings in
+predicted order so an interrupted calibration already holds the likely winner. With priors only,
+nothing is pruned; every prediction carries a fitted/prior flag. The queueing term is what made
+the llama.cpp result on the RTX 3090 explicable before it was measured: with 8 clients on 4 slots
+the median request waits a full wave, which is the 952 ms TTFT the trial recorded, and 8 slots
+remove the wait.
+
+## 7. Caching and reproducibility
 
 A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *shape* of the hardware (GPU model, compute capability, total VRAM, CPU model, core counts, SIMD flags, total RAM) and not free memory, so a busy machine does not invalidate its own cache. The profile stores the backend version; a version change invalidates it. It also stores the full calibration table, workload description and llmtrace version, so a decision can be re-derived offline.
 
-## 6. Limitations
+## 8. Limitations
 
 - One GPU. Tensor parallel is a stage the search does not have yet.
 - The synthetic workload is a proxy. A deployment with 4k-token prompts or 2k-token outputs sits elsewhere on the throughput/latency curve. Live re-tuning under real traffic is on the roadmap.
