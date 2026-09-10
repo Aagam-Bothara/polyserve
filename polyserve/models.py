@@ -234,6 +234,8 @@ class Profile(BaseModel):
     hardware: HardwareDescriptor
     model_id: str
     objective: str
+    workload: str = "default"
+    workload_spec: Dict[str, Any] = Field(default_factory=dict)
     backend: str
     backend_version: Optional[str]
     config: Config

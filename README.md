@@ -54,8 +54,29 @@ flowchart LR
 4. **Memory planner** — before any process is launched:
    `estimated = weights + kv_cache(ctx, batch, dtype) + runtime_workspace + safety_margin`, keep a config only if `estimated ≤ 0.95 × available`. This prunes the grid from ~144 points to a dozen. (`polyserve plan <model>`)
 5. **Calibrate** — a staged search, not a grid: (1) one short run per quant, keep the top two; (2) largest safe memory config; (3) batch / concurrency sweep. Each trial replays a fixed synthetic workload (16 prompts × 256-token prefill × 128-token decode at concurrency 1/4/8, ~10 s) and is measured with [llmtrace](https://github.com/Aagam-Bothara/llmtrace): tok/s, TTFT, TPOT, peak memory, GPU utilisation, power.
-6. **Cache** — `~/.polyserve/profiles/<hardware_hash>/<model>/<objective>.json` holds the winner, the full launch args, the whole calibration table, and versions. Invalidated when the hardware or backend version changes; `polyserve recalibrate` forces a rerun.
+6. **Cache** — `~/.polyserve/profiles/<hardware_hash>/<model>/<objective>[-<workload>].json` holds the winner, the full launch args, the whole calibration table, and versions. Invalidated when the hardware or backend version changes; `polyserve recalibrate` forces a rerun.
 7. **Serve** — the winner runs as a supervised subprocess (health check + auto-restart). A thin proxy on `:8000` exposes `/v1/chat/completions`, `/v1/completions`, `/v1/models` (streaming passthrough) and `/polyserve/profile`, which returns the active configuration and calibration table.
+
+### Workloads
+
+Real traffic is not one shape. `--workload` picks the synthetic workload every trial replays, and each preset carries its own TTFT ceiling for the `balanced` objective. Profiles are cached per workload, so `serve --workload rag` and `serve --workload chat` each get their own calibration.
+
+| `--workload` | prefill | decode | concurrency | TTFT ceiling | shaped like |
+|---|---|---|---|---|---|
+| `default` | 256 | 128 | 1 / 4 / 8 | 500 ms | the spec's calibration workload |
+| `chat` | 512 | 128 | 1 / 4 / 8 | 500 ms | assistant turns |
+| `long-context` | 8192 | 256 | 1 / 2 / 4 | 2000 ms | document Q&A, summarisation |
+| `generation` | 128 | 1024 | 1 / 4 / 8 | 500 ms | code / story generation |
+| `high-concurrency` | 256 | 64 | 32 / 64 / 128 | 1000 ms | many short requests |
+| `rag` | 6144 | 64 | 1 / 4 / 8 | 1500 ms | retrieval-augmented answers |
+
+Prompt lengths are exact when the model's tokenizer is available (prompts are fitted to the target token count), and output tokens are counted from the server's `usage` or the tokenizer, never from stream chunks. The planner drops any config whose context cannot hold prefill + decode.
+
+```bash
+polyserve serve meta-llama/Llama-3.2-3B-Instruct --workload chat
+polyserve serve meta-llama/Llama-3.2-3B-Instruct --workload rag
+polyserve serve meta-llama/Llama-3.2-3B-Instruct --workload long-context
+```
 
 ### Objectives
 
@@ -65,7 +86,7 @@ All four are constrained argmax. There is no weighted score formula in v1.
 |---|---|
 | `throughput` | max tok/s |
 | `latency` | min TTFT s.t. tok/s ≥ floor |
-| `balanced` (default) | max tok/s s.t. TTFT ≤ ceiling (500 ms; `--ttft-ceiling`) |
+| `balanced` (default) | max tok/s s.t. TTFT ≤ ceiling (the workload's; `--ttft-ceiling` overrides) |
 | `efficiency` | min joules/token s.t. tok/s ≥ floor |
 
 The floor defaults to 50% of the best observed tok/s (`--tok-s-floor` for an absolute value). If nothing satisfies a constraint, the least-violating config wins and the profile says so.
@@ -75,8 +96,9 @@ The floor defaults to 50% of the best observed tok/s (`--tok-s-floor` for an abs
 ## CLI
 
 ```
-polyserve serve <model> [--objective X] [--port N] [--backend NAME] [--skip-calibration]
+polyserve serve <model> [--objective X] [--workload W] [--port N] [--backend NAME] [--skip-calibration]
 polyserve probe                 # print HardwareDescriptor
+polyserve workloads             # list workload presets
 polyserve plan <model>          # print feasible configs without running them
 polyserve bench <model>         # run calibration and print the table, don't serve
 polyserve recalibrate <model>   # force a rerun and overwrite the cached profile

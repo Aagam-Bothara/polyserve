@@ -13,7 +13,7 @@ from polyserve import cache as profile_cache
 from polyserve.backends import BaseBackend, registry as backend_registry
 from polyserve.calibrate.objectives import Constraints
 from polyserve.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRunner, TrialRunner
-from polyserve.calibrate.workload import Workload
+from polyserve.calibrate.workload import Workload, get_workload
 from polyserve.hardware import hardware_hash, llmtrace_version, probe
 from polyserve.memory import plan as memory_plan
 from polyserve.models import Config, HardwareDescriptor, MemoryEstimate, ModelSpec, PreparedModel, Profile
@@ -54,14 +54,20 @@ def prepare_and_plan(
     candidates: List[str],
     reg: Dict[str, BaseBackend],
     materialize: bool = False,
+    workload: Optional[Workload] = None,
 ) -> PlanResult:
-    """Prepare each candidate backend's model, enumerate its grid, keep what fits."""
+    """Prepare each candidate backend's model, enumerate its grid, keep what fits the workload."""
     result = PlanResult(hw=hw, spec=spec, candidates=list(candidates))
+    min_ctx = workload.min_ctx if workload else 0
     for name in candidates:
         backend = reg[name]
         try:
             prepared = backend.prepare(spec, hw)
-            grid = backend.candidate_configs(hw, prepared)
+            grid = backend.candidate_configs(hw, prepared, min_ctx=min_ctx)
+            if not grid:
+                raise RuntimeError(
+                    f"model max context {prepared.arch.max_position_embeddings} < workload minimum {min_ctx}"
+                )
             kept = memory_plan(hw, prepared, grid, backend.memory_model(hw))
             result.prepared[name] = prepared
             result.feasible[name] = kept
@@ -87,14 +93,18 @@ def _profile_for(
     prepared: PreparedModel,
     table=None,
     notes: Optional[List[str]] = None,
+    workload: Optional[Workload] = None,
 ) -> Profile:
     launch = backend.launch_spec(cfg, prepared, 0)
+    workload = workload or get_workload("default")
     return Profile(
         polyserve_version=__version__,
         hardware_hash=hardware_hash(hw),
         hardware=hw,
         model_id=spec.hf_id,
         objective=objective,
+        workload=workload.name,
+        workload_spec=workload.spec(),
         backend=backend.name,
         backend_version=backend.version(hw),
         config=cfg,
@@ -108,14 +118,15 @@ def _profile_for(
 
 
 def default_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, reg: Dict[str, BaseBackend],
-                    objective: str = "balanced") -> Profile:
+                    objective: str = "balanced", workload: Optional[Workload] = None) -> Profile:
     """Uncalibrated: first candidate backend with its default config (or the largest feasible one)."""
+    workload = workload or get_workload("default")
     for name in plan.candidates:
         prepared = plan.prepared.get(name)
         if prepared is None:
             continue
         backend = reg[name]
-        cfg = backend.default_config(hw, prepared)
+        cfg = backend.default_config(hw, prepared, min_ctx=workload.min_ctx)
         feasible = plan.feasible.get(name) or []
         if feasible and not any(c.key() == cfg.key() for c, _ in feasible):
             # Default does not fit; take the feasible config with the most headroom for ctx/batch.
@@ -123,7 +134,8 @@ def default_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, r
         if cfg.quant not in prepared.weights_bytes:
             cfg.quant = next(iter(prepared.weights_bytes))
         backend.materialize(prepared, [cfg.quant])
-        return _profile_for(hw, spec, objective, backend, cfg, prepared, notes=["uncalibrated defaults"])
+        return _profile_for(hw, spec, objective, backend, cfg, prepared, notes=["uncalibrated defaults"],
+                            workload=workload)
     raise RuntimeError(f"no usable backend for {spec.hf_id}; errors: {plan.errors}")
 
 
@@ -139,8 +151,8 @@ def calibrate(
     runner: Optional[TrialRunner] = None,
     log_dir: Optional[Path] = None,
 ) -> Profile:
-    workload = workload or Workload()
-    constraints = constraints or Constraints()
+    workload = workload or get_workload("default")
+    constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms)
     feasible = plan.all_feasible
     if not feasible:
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")
@@ -161,7 +173,8 @@ def calibrate(
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]
     prepared = plan.prepared[winner.config.backend]
-    return _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results, notes=notes)
+    return _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results, notes=notes,
+                        workload=workload)
 
 
 def resolve_profile(
@@ -178,10 +191,11 @@ def resolve_profile(
 ) -> Profile:
     """Cached profile if valid, else run the full pipeline and cache the result."""
     say = on_stage or (lambda s: None)
+    workload = workload or get_workload("default")
     say("probe")
     hw = hw or probe()
     if not recalibrate and not skip_calibration:
-        cached = profile_cache.load(hw, spec, objective)
+        cached = profile_cache.load(hw, spec, objective, workload.name)
         if cached is not None and (force_backend is None or cached.backend == force_backend):
             say("cache hit")
             return cached
@@ -190,10 +204,10 @@ def resolve_profile(
     if not candidates:
         raise RuntimeError("no backend supports this machine/model; run `polyserve probe` for details")
     say("prepare + plan")
-    plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration)
+    plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload)
     if skip_calibration:
         say("defaults")
-        return default_profile(hw, spec, plan, reg, objective)
+        return default_profile(hw, spec, plan, reg, objective, workload=workload)
     say("calibrate")
     profile = calibrate(hw, spec, objective, plan, reg, workload=workload, constraints=constraints, progress=progress)
     profile_cache.save(profile)

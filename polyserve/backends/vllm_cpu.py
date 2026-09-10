@@ -6,7 +6,7 @@ import math
 import sys
 from typing import List
 
-from polyserve.backends.base import LaunchSpec, LlmtraceHooks
+from polyserve.backends.base import LaunchSpec, LlmtraceHooks, ctx_grid
 from polyserve.backends.vllm import PAGED_KV_FRACTION, VllmBackend
 from polyserve.hfconfig import load_arch
 from polyserve.memory import MemoryModel, kv_cache_bytes
@@ -36,17 +36,20 @@ class VllmCpuBackend(VllmBackend):
             device="cpu",
         )
 
-    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel) -> List[Config]:
-        max_pos = model.arch.max_position_embeddings
-        ctxs = [c for c in (2048, 4096) if c <= max_pos] or [max_pos]
+    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
+        ctxs = [c for c in ctx_grid(model.arch.max_position_embeddings, min_ctx) if c <= 8192] or ctx_grid(
+            model.arch.max_position_embeddings, min_ctx
+        )[:1]
         return [
             Config(backend=self.name, quant="bf16", ctx=ctx, batch=batch)
             for ctx in ctxs
             for batch in (4, 16, 64)
         ]
 
-    def default_config(self, hw: HardwareDescriptor, model: PreparedModel) -> Config:
-        return Config(backend=self.name, quant="bf16", ctx=min(4096, model.arch.max_position_embeddings), batch=16)
+    def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config:
+        return Config(
+            backend=self.name, quant="bf16", ctx=min(max(4096, min_ctx), model.arch.max_position_embeddings), batch=16
+        )
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         args = [

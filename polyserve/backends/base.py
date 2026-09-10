@@ -144,6 +144,24 @@ class Process:
             return ""
 
 
+CTX_GRID = (2048, 4096, 8192, 16384, 32768, 65536, 131072)
+CTX_GRID_WIDTH = 3  # sizes tried per calibration: the smallest that fits the workload and the next two
+
+
+def ctx_grid(max_pos: int, min_ctx: int = 0) -> List[int]:
+    """Context lengths to try: the three smallest standard sizes that fit the model and hold the workload.
+
+    Returns [] if the model cannot hold `min_ctx` at all.
+    """
+    if min_ctx > max_pos:
+        return []
+    grid = [c for c in CTX_GRID if min_ctx <= c <= max_pos]
+    if not grid:
+        # Workload needs more than the largest standard size that fits: use the model max.
+        grid = [max_pos]
+    return grid[:CTX_GRID_WIDTH]
+
+
 def free_port(preferred: Optional[int] = None) -> int:
     if preferred:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -171,7 +189,7 @@ class Backend(Protocol):
 
     def estimate_memory(self, cfg: Config, model: PreparedModel, hw: HardwareDescriptor) -> int: ...
 
-    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel) -> List[Config]: ...
+    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]: ...
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec: ...
 
@@ -179,7 +197,7 @@ class Backend(Protocol):
 
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks: ...
 
-    def default_config(self, hw: HardwareDescriptor, model: PreparedModel) -> Config: ...
+    def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config: ...
 
     def version(self, hw: HardwareDescriptor) -> Optional[str]: ...
 

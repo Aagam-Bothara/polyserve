@@ -7,7 +7,7 @@ import logging
 import sys
 from typing import List, Optional
 
-from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks
+from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid
 from polyserve.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
@@ -68,9 +68,8 @@ class SglangBackend(BaseBackend):
             device="gpu",
         )
 
-    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel) -> List[Config]:
-        max_pos = model.arch.max_position_embeddings
-        ctxs = [c for c in (2048, 4096, 8192) if c <= max_pos] or [max_pos]
+    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
+        ctxs = ctx_grid(model.arch.max_position_embeddings, min_ctx)
         out: List[Config] = []
         for quant in [q for q in self.precisions(hw) if q in model.weights_bytes]:
             for frac in (0.80, 0.88, 0.93):
@@ -81,11 +80,11 @@ class SglangBackend(BaseBackend):
                         )
         return out
 
-    def default_config(self, hw: HardwareDescriptor, model: PreparedModel) -> Config:
+    def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config:
         return Config(
             backend=self.name,
             quant=self.precisions(hw)[0],
-            ctx=min(4096, model.arch.max_position_embeddings),
+            ctx=min(max(4096, min_ctx), model.arch.max_position_embeddings),
             batch=256,
             gpu_memory_utilization=0.88,
         )

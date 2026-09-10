@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks
+from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid
 from polyserve.gguf import (
     GGUF_QUANTS,
     GGUFCandidate,
@@ -102,10 +102,9 @@ class LlamaCppBackend(BaseBackend):
     def _quants(self, model: PreparedModel) -> List[str]:
         return [q for q in GGUF_QUANTS if q in model.weights_bytes] or list(model.weights_bytes)
 
-    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel) -> List[Config]:
+    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
         layers = model.arch.num_layers
-        max_pos = model.arch.max_position_embeddings
-        ctxs = [c for c in (2048, 4096, 8192) if c <= max_pos] or [max_pos]
+        ctxs = ctx_grid(model.arch.max_position_embeddings, min_ctx)
         if self.cuda:
             ngls = sorted({layers + 1, (3 * layers) // 4, layers // 2}, reverse=True)  # +1 = output layer too
             n_batches = [512]
@@ -125,12 +124,12 @@ class LlamaCppBackend(BaseBackend):
                             )
         return out
 
-    def default_config(self, hw: HardwareDescriptor, model: PreparedModel) -> Config:
+    def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config:
         quants = self._quants(model)
         return Config(
             backend=self.name,
             quant="Q4_K_M" if "Q4_K_M" in quants else quants[0],
-            ctx=min(4096, model.arch.max_position_embeddings),
+            ctx=min(max(4096, min_ctx), model.arch.max_position_embeddings),
             batch=4,
             n_gpu_layers=(model.arch.num_layers + 1) if self.cuda else 0,
             n_batch=512,
@@ -193,14 +192,14 @@ class LlamaCppCpuBackend(LlamaCppBackend):
     cuda = False
     runtime_workspace_bytes = 512 * MiB
 
-    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel) -> List[Config]:
-        cfgs = super().candidate_configs(hw, model)
+    def candidate_configs(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> List[Config]:
+        cfgs = super().candidate_configs(hw, model, min_ctx)
         for c in cfgs:
             c.extra["threads"] = hw.cpu.physical_cores
         return cfgs
 
-    def default_config(self, hw: HardwareDescriptor, model: PreparedModel) -> Config:
-        c = super().default_config(hw, model)
+    def default_config(self, hw: HardwareDescriptor, model: PreparedModel, min_ctx: int = 0) -> Config:
+        c = super().default_config(hw, model, min_ctx)
         c.extra["threads"] = hw.cpu.physical_cores
         return c
 
