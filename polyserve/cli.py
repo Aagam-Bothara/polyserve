@@ -300,6 +300,19 @@ def compare(
 
 
 @app.command()
+def report(
+    results: Optional[Path] = typer.Option(None, "--results", help="Results dir (default benchmarks/results)"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Where to write RESULTS.md and the SVG"),
+) -> None:
+    """Aggregate compare results: median gain over the best SLO-meeting default, RESULTS.md, plot."""
+    from polyserve.bench.report import write_report
+
+    md, svg, summary = write_report(results, out)
+    console.print(summary.headline())
+    console.print(f"[dim]wrote {md} and {svg}[/]")
+
+
+@app.command()
 def profiles() -> None:
     """List cached profiles."""
     from polyserve import cache as profile_cache
