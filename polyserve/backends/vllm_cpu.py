@@ -71,4 +71,7 @@ class VllmCpuBackend(VllmBackend):
         return LaunchSpec(args=args, env=env)
 
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
-        return LlmtraceHooks(health_path="/health", model_name=model.spec.hf_id, gpu_ids=[], process_memory=True)
+        return LlmtraceHooks(
+            health_path="/health", model_name=model.spec.hf_id, tokenizer_id=model.spec.hf_id, gpu_ids=[],
+            process_memory=True,
+        )

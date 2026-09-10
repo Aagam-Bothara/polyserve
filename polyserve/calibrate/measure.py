@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from polyserve.backends.base import LlmtraceHooks
+from polyserve.calibrate.tokens import TokenCounter, worst_source
 from polyserve.calibrate.workload import Workload
 from polyserve.models import TrialMetrics
 
@@ -250,6 +251,7 @@ class RequestOutcome:
     ttft_s: float = 0.0
     duration_s: float = 0.0
     tokens: int = 0
+    token_source: str = "none"  # "usage" | "tokenizer" | "chunks"
     error: Optional[str] = None
 
 
@@ -266,11 +268,12 @@ def _parse_sse_line(line: str) -> Optional[Dict[str, Any]]:
 
 
 async def _one_request(
-    client: httpx.AsyncClient, url: str, body: Dict[str, Any], timeout: float
+    client: httpx.AsyncClient, url: str, body: Dict[str, Any], timeout: float, counter: TokenCounter
 ) -> RequestOutcome:
     t0 = time.perf_counter()
     first: Optional[float] = None
-    tokens = 0
+    chunks = 0
+    pieces: List[str] = []
     usage_tokens: Optional[int] = None
     try:
         async with client.stream("POST", url, json=body, timeout=timeout) as resp:
@@ -290,7 +293,8 @@ async def _one_request(
                     if text:
                         if first is None:
                             first = time.perf_counter()
-                        tokens += 1
+                        chunks += 1
+                        pieces.append(text)
                 usage = obj.get("usage")
                 if isinstance(usage, dict) and usage.get("completion_tokens"):
                     usage_tokens = int(usage["completion_tokens"])
@@ -299,14 +303,27 @@ async def _one_request(
     end = time.perf_counter()
     if first is None:
         return RequestOutcome(ok=False, error="no tokens produced")
-    return RequestOutcome(
-        ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=usage_tokens or tokens
-    )
+    # Exact count: server usage > model tokenizer > chunk count (approximate).
+    if usage_tokens:
+        tokens, source = usage_tokens, "usage"
+    else:
+        counted = counter.count("".join(pieces))
+        if counted:
+            tokens, source = counted, "tokenizer"
+        else:
+            tokens, source = chunks, "chunks"
+    return RequestOutcome(ok=True, ttft_s=first - t0, duration_s=end - t0, tokens=tokens, token_source=source)
 
 
 async def _drive(
-    base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int, timeout: float
+    base_url: str,
+    hooks: LlmtraceHooks,
+    workload: Workload,
+    concurrency: int,
+    timeout: float,
+    counter: Optional[TokenCounter] = None,
 ) -> List[RequestOutcome]:
+    counter = counter or TokenCounter()
     sem = asyncio.Semaphore(concurrency)
     url = base_url.rstrip("/") + hooks.completions_path
     results: List[RequestOutcome] = []
@@ -325,7 +342,7 @@ async def _drive(
             if hooks.stream_usage:
                 body["stream_options"] = {"include_usage": True}
             async with sem:
-                results.append(await _one_request(client, url, body, timeout))
+                results.append(await _one_request(client, url, body, timeout, counter))
 
         await asyncio.gather(*(worker(p) for p in workload.prompts))
     return results
@@ -342,6 +359,7 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
     )
     if not ok:
         return m
+    m.token_count_source = worst_source(o.token_source for o in ok)
     ttfts = sorted(o.ttft_s * 1000 for o in ok)
     m.ttft_ms = statistics.median(ttfts)
     m.ttft_p95_ms = ttfts[min(len(ttfts) - 1, int(round(0.95 * (len(ttfts) - 1))))]
@@ -358,6 +376,7 @@ def run_trial(
     pid: Optional[int] = None,
     request_timeout: float = 120.0,
     warmup: bool = True,
+    counter: Optional[TokenCounter] = None,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
@@ -365,13 +384,18 @@ def run_trial(
     throughput (that is the load the server would actually be run at); energy per token
     is total joules / total tokens across all levels; peak memory is the max.
     """
+    if counter is None:
+        counter = TokenCounter.for_model(hooks.tokenizer_id)
+    if counter.available and not workload.fitted:
+        workload.fit_prompts(counter)
+    prompt_tokens = workload.measured_prompt_tokens(counter) or 0
     if warmup:
         small = Workload(
             n_prompts=min(2, workload.n_prompts), prefill_tokens=workload.prefill_tokens,
             decode_tokens=min(16, workload.decode_tokens), concurrencies=(1,), seed=workload.seed + 1,
         )
         try:
-            asyncio.run(_drive(base_url, hooks, small, 1, request_timeout))
+            asyncio.run(_drive(base_url, hooks, small, 1, request_timeout, counter))
         except Exception as exc:
             logger.debug("warmup failed: %s", exc)
 
@@ -386,12 +410,13 @@ def run_trial(
     for c in workload.concurrencies:
         with Telemetry(hooks, pid=pid) as tel:
             t0 = time.perf_counter()
-            outcomes = asyncio.run(_drive(base_url, hooks, workload, c, request_timeout))
+            outcomes = asyncio.run(_drive(base_url, hooks, workload, c, request_timeout, counter))
             wall = time.perf_counter() - t0
         m = _metrics_from(outcomes, wall, c)
         s = tel.summary
         source = s.source if s.source != "none" else source
         m.telemetry_source = s.source
+        m.prompt_tokens = prompt_tokens
         m.peak_mem_mb = s.peak_mem_mb
         m.gpu_util_pct = s.gpu_util_pct
         m.power_w = s.power_w
@@ -425,6 +450,8 @@ def run_trial(
         output_tokens=total_tokens,
         concurrency=best.concurrency,
         telemetry_source=source,
+        token_count_source=worst_source(x.token_count_source for x in per_level.values()),
+        prompt_tokens=prompt_tokens,
         by_concurrency=per_level,
     )
     return summary

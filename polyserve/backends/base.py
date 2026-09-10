@@ -30,6 +30,7 @@ class LlmtraceHooks:
     models_path: str = "/v1/models"
     stream_usage: bool = True  # backend reports usage in the final stream chunk when asked
     model_name: Optional[str] = None  # value to put in the "model" field of requests
+    tokenizer_id: Optional[str] = None  # HF id whose tokenizer counts tokens when usage is absent
     gpu_ids: List[int] = field(default_factory=list)  # NVML indices llmtrace should sample
     process_memory: bool = False  # sample RSS of the backend process (CPU backends)
 

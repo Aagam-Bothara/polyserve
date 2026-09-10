@@ -15,7 +15,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.testclient import TestClient
 
 from polyserve.backends.base import LlmtraceHooks
-from polyserve.calibrate.measure import _metrics_from, _parse_sse_line, RequestOutcome, run_trial
+from polyserve.calibrate.measure import RequestOutcome, _metrics_from, _parse_sse_line, run_trial
+from polyserve.calibrate.tokens import TokenCounter, worst_source
 from polyserve.calibrate.workload import Workload
 from polyserve.serve.proxy import create_app
 
@@ -34,6 +35,13 @@ def fake_upstream(token_delay_s: float = 0.002) -> FastAPI:
 
     @app.post("/v1/completions")
     async def completions(req: Request):
+        return await _complete(req, with_usage=True)
+
+    @app.post("/v1/completions_nousage")
+    async def completions_nousage(req: Request):
+        return await _complete(req, with_usage=False)
+
+    async def _complete(req: Request, with_usage: bool):
         body = await req.json()
         app.state.requests.append(body)
         n = int(body.get("max_tokens", 8))
@@ -41,10 +49,12 @@ def fake_upstream(token_delay_s: float = 0.002) -> FastAPI:
             return JSONResponse({"choices": [{"text": "x " * n}], "usage": {"completion_tokens": n}})
 
         async def gen():
-            for i in range(n):
+            # Two tokens per chunk on purpose: chunk counting must not be mistaken for token counting.
+            for i in range(0, n, 2):
                 await asyncio.sleep(token_delay_s)
-                yield f"data: {json.dumps({'choices': [{'text': 'x '}]})}\n\n"
-            yield f"data: {json.dumps({'choices': [], 'usage': {'completion_tokens': n}})}\n\n"
+                yield f"data: {json.dumps({'choices': [{'text': 'x y '}]})}\n\n"
+            if with_usage:
+                yield f"data: {json.dumps({'choices': [], 'usage': {'completion_tokens': n}})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
@@ -109,7 +119,7 @@ def test_run_trial_against_fake_server(upstream):
     hooks = LlmtraceHooks(model_name="fake-model", gpu_ids=[])
     m = run_trial(srv.url, hooks, wl, pid=None, warmup=True)
     assert m.ok and m.requests == 8 and m.failed == 0
-    assert m.output_tokens == 64  # usage.completion_tokens honoured
+    assert m.output_tokens == 64 and m.token_count_source == "usage"  # usage.completion_tokens honoured
     assert set(m.by_concurrency) == {"1", "4"}
     assert m.by_concurrency["4"].tok_s >= m.by_concurrency["1"].tok_s * 0.8
     assert 0 < m.ttft_ms < 5000 and m.tpot_ms > 0
@@ -137,7 +147,7 @@ def test_proxy_streams_and_forwards(upstream):
         with client.stream("POST", "/v1/completions", json={"prompt": "hi", "max_tokens": 3, "stream": True}) as s:
             assert s.headers["content-type"].startswith("text/event-stream")
             lines = [ln for ln in s.iter_lines() if ln.startswith("data:")]
-        assert lines[-1] == "data: [DONE]" and len(lines) == 5
+        assert lines[-1] == "data: [DONE]" and len(lines) == 4  # 2 content chunks + usage + DONE
         assert client.get("/polyserve/profile").status_code == 404
 
 
@@ -170,3 +180,36 @@ def test_telemetry_without_gpu_falls_back_to_process(monkeypatch):
     assert t.summary.source in ("psutil", "rapl")
     if t.summary.source == "psutil":
         assert t.summary.peak_mem_mb and t.summary.peak_mem_mb > 1
+
+
+def _word_counter() -> TokenCounter:
+    return TokenCounter(encode=lambda text: len(text.split()), name="fake-words")
+
+
+def test_tokens_from_tokenizer_when_usage_absent(upstream):
+    srv, _ = upstream
+    hooks = LlmtraceHooks(model_name="fake-model", completions_path="/v1/completions_nousage")
+    wl = Workload(n_prompts=2, prefill_tokens=8, decode_tokens=8, concurrencies=(1,))
+    m = run_trial(srv.url, hooks, wl, warmup=False, counter=_word_counter())
+    # 8 tokens streamed as 4 chunks of "x y ": the tokenizer sees 8 words, chunk counting would say 4.
+    assert m.output_tokens == 16 and m.token_count_source == "tokenizer"
+    assert abs(m.prompt_tokens - 8) <= 2 and wl.fitted  # fitter tolerance; fixed prefix+suffix set a floor
+
+
+def test_tokens_from_chunks_is_flagged_when_nothing_better(upstream):
+    srv, _ = upstream
+    hooks = LlmtraceHooks(model_name="fake-model", completions_path="/v1/completions_nousage")
+    wl = Workload(n_prompts=2, prefill_tokens=8, decode_tokens=8, concurrencies=(1,))
+    m = run_trial(srv.url, hooks, wl, warmup=False, counter=TokenCounter())
+    assert m.output_tokens == 8 and m.token_count_source == "chunks"  # 4 chunks x 2 requests, approximate
+    assert m.prompt_tokens == 0 and not wl.fitted
+
+
+def test_worst_source_and_prompt_fitting():
+    assert worst_source(["usage", "usage"]) == "usage"
+    assert worst_source(["usage", "tokenizer"]) == "tokenizer"
+    assert worst_source(["tokenizer", "chunks", "usage"]) == "chunks"
+    assert worst_source([]) == "none"
+    wl = Workload(n_prompts=3, prefill_tokens=100, decode_tokens=4).fit_prompts(_word_counter())
+    assert wl.fitted and all(abs(len(p.split()) - 100) <= 2 for p in wl.prompts)
+    assert "~" not in wl.describe()

@@ -177,6 +177,7 @@ class LlamaCppBackend(BaseBackend):
         return LlmtraceHooks(
             health_path="/health",
             model_name=model.spec.hf_id,
+            tokenizer_id=model.spec.hf_id,
             gpu_ids=[hw.gpu.index] if (self.cuda and hw.gpu) else [],
             process_memory=not self.cuda,
         )

@@ -204,6 +204,8 @@ class TrialMetrics(BaseModel):
     output_tokens: int = 0
     concurrency: int = 1
     telemetry_source: str = "none"  # "llmtrace" | "pynvml" | "psutil" | "none"
+    token_count_source: str = "none"  # "usage" | "tokenizer" | "chunks" (approximate) | "none"
+    prompt_tokens: int = 0  # mean measured prompt length (0 if no tokenizer)
     by_concurrency: Dict[str, "TrialMetrics"] = Field(default_factory=dict)
 
     @property

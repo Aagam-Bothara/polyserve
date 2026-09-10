@@ -143,5 +143,6 @@ class VllmBackend(BaseBackend):
         return LlmtraceHooks(
             health_path="/health",
             model_name=model.hf_path or model.spec.hf_id,
+            tokenizer_id=model.spec.hf_id,
             gpu_ids=[hw.gpu.index] if hw.gpu else [],
         )
