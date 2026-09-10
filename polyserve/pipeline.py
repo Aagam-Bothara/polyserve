@@ -169,12 +169,16 @@ def calibrate(
     winner, notes = search.run(feasible)
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
-    notes.append(f"calibration took {time.monotonic() - t0:.0f}s over {len(search.results)} trials")
+    elapsed = time.monotonic() - t0
+    notes.append(f"calibration took {elapsed:.0f}s over {len(search.results)} trials")
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]
     prepared = plan.prepared[winner.config.backend]
-    return _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results, notes=notes,
-                        workload=workload)
+    profile = _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results,
+                           notes=notes, workload=workload)
+    profile.calibration_seconds = elapsed
+    profile.calibration_trials = len(search.results)
+    return profile
 
 
 def resolve_profile(

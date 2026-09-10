@@ -243,6 +243,8 @@ class Profile(BaseModel):
     launch_args: List[str]
     launch_env: Dict[str, str] = Field(default_factory=dict)
     calibration_table: List[TrialResult] = Field(default_factory=list)
+    calibration_seconds: float = 0.0
+    calibration_trials: int = 0
     llmtrace_version: Optional[str] = None
     created_at: float = Field(default_factory=time.time)
     notes: List[str] = Field(default_factory=list)

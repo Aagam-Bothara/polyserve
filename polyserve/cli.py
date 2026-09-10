@@ -7,6 +7,7 @@ import logging
 import math
 import signal
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 import typer
@@ -252,6 +253,50 @@ def recalibrate(
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"))
     console.print(_trial_table(profile.calibration_table, winner=profile.config.key()))
     _print_profile(profile)
+
+
+@app.command()
+def compare(
+    model: str,
+    objective: str = typer.Option("balanced", "--objective", callback=_objective),
+    workload: str = WORKLOAD_OPT,
+    backend: Optional[str] = typer.Option(None, "--backend", help="Restrict PolyServe's candidates to one backend"),
+    ollama_model: Optional[str] = typer.Option(None, "--ollama-model", help="Ollama tag for the ollama row"),
+    include: Optional[List[str]] = typer.Option(None, "--include", help="Only these reference rows"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Results directory (default benchmarks/results)"),
+    ttft_ceiling: Optional[float] = TTFT_OPT,
+    tok_s_floor: Optional[float] = typer.Option(None),
+) -> None:
+    """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
+    from polyserve.bench import compare as _compare, to_markdown
+    from polyserve.bench.compare import save
+    from polyserve.hardware import probe as _probe
+    from polyserve.pipeline import prepare_and_plan, resolve_profile, select
+
+    wl = _workload(workload)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl)
+    hw = _probe()
+    spec = ModelSpec(hf_id=model)
+    profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
+                              progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"))
+    _print_profile(profile)
+    candidates, reg = select(hw, spec, force=backend)
+    planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl)
+
+    def _row_progress(label: str, row) -> None:
+        if row is None:
+            err.print(f"[cyan]compare[/] {label} ...")
+        elif row.ok:
+            err.print(f"[green]compare[/] {label}: {row.scored_tok_s:.1f} tok/s @c{row.scored_concurrency}, "
+                      f"TTFT {_fmt(row.scored_ttft_ms, 0)} ms, SLO {'met' if row.meets_slo else 'missed'}")
+        else:
+            err.print(f"[red]compare[/] {label} FAILED: {(row.error or '').splitlines()[0][:80]}")
+
+    result = _compare(hw, spec, profile, planned.prepared, reg, workload=wl, constraints=cons,
+                      ollama_tag=ollama_model, include=include or None, progress=_row_progress)
+    path = save(result, out)
+    console.print(to_markdown(result))
+    console.print(f"[dim]saved {path}[/]")
 
 
 @app.command()

@@ -103,6 +103,7 @@ polyserve plan <model>          # print feasible configs without running them
 polyserve bench <model>         # run calibration and print the table, don't serve
 polyserve recalibrate <model>   # force a rerun and overwrite the cached profile
 polyserve profiles              # list cached profiles
+polyserve compare <model>       # PolyServe's pick vs stock defaults vs Ollama, one workload -> results JSON
 ```
 
 `--skip-calibration` serves the first candidate backend with sane defaults immediately; nothing is cached.
@@ -125,7 +126,7 @@ Workload: 16 prompts × ~256-token prefill × 128-token decode, `--objective bal
 
 Calibration on this machine: 10 trials, 35 minutes with vLLM in the mix (vLLM startup with fp8 quantisation and CUDA-graph capture dominates; each trial's workload is ~10 s), 4 minutes for the llama.cpp-only run. n/r = not recorded in that run. The llama.cpp rows show the other kind of win: same quant, same offload, but 8 server slots instead of 4 turns a 952 ms queueing TTFT into 72 ms under an 8-client load. Peak memory for vLLM is its `gpu_memory_utilization` pre-allocation, not live usage. The fp8 pick is 1.5× the throughput and 31% less energy per token than bf16 on the same card, which is the kind of decision a default never makes for you.
 
-Rows for the A100/A30 lab node and a GTX 1080 / CPU-only box land here from `polyserve bench` (week 6). Every _pending_ cell is a placeholder, not a claim.
+The full matrix (A100, RTX 3090, A30, GTX 1080, CPU × Llama-3B / Llama-8B / Qwen-7B × workloads) is produced by `polyserve compare` on each machine and collected under [benchmarks/](benchmarks/). Every _pending_ cell is a placeholder, not a claim.
 
 ## Backend interface
 
