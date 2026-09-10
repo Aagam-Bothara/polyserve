@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyserve"
+version = "0.1.0"
+description = "Hardware-adaptive LLM serving runtime: picks and tunes the best inference backend for your machine"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+license = {text = "MIT"}
+authors = [{name = "Aagam Sachin Bothara", email = "mweeb19@gmail.com"}]
+keywords = ["llm", "inference", "vllm", "sglang", "llama.cpp", "serving", "autotuning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "typer>=0.12",
+    "rich>=13.0",
+    "httpx>=0.27",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "psutil>=5.9",
+    "huggingface_hub>=0.23",
+]
+
+[project.optional-dependencies]
+nvml = ["nvidia-ml-py>=12.535.133"]
+llmtrace = ["llmtrace>=0.2.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.1"]
+
+[project.scripts]
+polyserve = "polyserve.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["polyserve*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
