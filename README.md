@@ -29,8 +29,9 @@ Each backend is a subprocess PolyServe launches with tuned arguments; you instal
 
 ```bash
 pip install polyserve[nvml]          # + NVML telemetry (power, utilisation) for calibration
-pip install vllm                     # or sglang, or build llama.cpp and put llama-server on PATH
-export LLAMA_SERVER=/path/to/llama-server   # optional, if not on PATH
+pip install "vllm==0.11.0" "transformers>=4.56,<5"   # vLLM 0.11 breaks on transformers 5.x
+pip install sglang                   # optional
+export LLAMA_SERVER=/path/to/llama-server   # build llama.cpp with -DGGML_CUDA=ON; optional if on PATH
 ```
 
 ---
@@ -88,23 +89,21 @@ polyserve profiles              # list cached profiles
 
 ## Benchmarks
 
-PolyServe auto-config vs. Ollama defaults vs. stock vLLM / llama.cpp defaults. Workload: 16 prompts × 256 prefill × 128 decode, concurrency 8, `--objective balanced`. Measured with llmtrace.
+Workload: 16 prompts × ~256-token prefill × 128-token decode, `--objective balanced` (TTFT ≤ 500 ms), measured with llmtrace (NVML at 100 ms). tok/s and TTFT are from the concurrency level the objective selected; W is mean device power during the trial; J/token is integrated device energy over output tokens.
 
-| Machine | Model | Runtime / config | tok/s | TTFT p50 (ms) | peak mem (GB) | W | J/token |
-|---|---|---|---|---|---|---|---|
-| A100 80 GB | Llama-3.2-3B-Instruct | PolyServe (auto) | _pending_ | | | | |
-| | | vLLM defaults | _pending_ | | | | |
-| | | Ollama defaults | _pending_ | | | | |
-| RTX 4090 | Llama-3.2-3B-Instruct | PolyServe (auto) | _pending_ | | | | |
-| | | vLLM defaults | _pending_ | | | | |
-| | | Ollama defaults | _pending_ | | | | |
-| GTX 1080 / CPU box | Llama-3.2-3B-Instruct | PolyServe (auto) | _pending_ | | | | |
-| | | llama.cpp defaults | _pending_ | | | | |
-| | | Ollama defaults | _pending_ | | | | |
+### RTX 3090 (24 GB, cc 8.6), Qwen2.5-3B-Instruct, vLLM 0.11.0 + llama.cpp b-current
 
-Numbers land here from `polyserve bench` on the three lab machines (week 6). Until then every cell is _pending_, not a claim.
+| Runtime / config | tok/s | TTFT p50 (ms) | peak mem (GB) | W | J/token |
+|---|---|---|---|---|---|
+| **PolyServe auto** → vLLM fp8, ctx 4096, max_num_seqs 64 | **1065** | 31 | 19.9 | 297 | **0.94** |
+| vLLM bf16, same ctx / batch (stock precision) | 694 | 37 | 20.0 | 296 | 1.37 |
+| PolyServe auto, llama.cpp only (`--backend llamacpp-cuda`) → Q4_K_M, ctx 8192, 8 slots, full offload | 645 | 72 | n/r | n/r | 0.44 |
+| llama.cpp Q4_K_M, 4 slots, full offload (stage-1 baseline; Ollama-style defaults) | 545 | 952 | n/r | n/r | 0.80 |
+| Ollama defaults | _not measured_ | | | | |
 
----
+Calibration on this machine: 10 trials, 35 minutes with vLLM in the mix (vLLM startup with fp8 quantisation and CUDA-graph capture dominates; each trial's workload is ~10 s), 4 minutes for the llama.cpp-only run. n/r = not recorded in that run. The llama.cpp rows show the other kind of win: same quant, same offload, but 8 server slots instead of 4 turns a 952 ms queueing TTFT into 72 ms under an 8-client load. Peak memory for vLLM is its `gpu_memory_utilization` pre-allocation, not live usage. The fp8 pick is 1.5× the throughput and 31% less energy per token than bf16 on the same card, which is the kind of decision a default never makes for you.
+
+Rows for the A100/A30 lab node and a GTX 1080 / CPU-only box land here from `polyserve bench` (week 6). Every _pending_ cell is a placeholder, not a claim.
 
 ## Backend interface
 

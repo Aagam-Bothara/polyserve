@@ -46,7 +46,8 @@ def _fmt(x: Optional[float], nd: int = 1, suffix: str = "") -> str:
 def _trial_table(results: List[TrialResult], winner: Optional[str] = None) -> Table:
     t = Table(title="Calibration", show_lines=False)
     for col in ("stage", "config", "tok/s", "TTFT ms", "TPOT ms", "peak MB", "W", "J/tok", "status"):
-        t.add_column(col, justify="right" if col not in ("stage", "config", "status") else "left")
+        t.add_column(col, justify="right" if col not in ("stage", "config", "status") else "left",
+                     overflow="fold", min_width=(40 if col == "config" else None))
     for r in results:
         m = r.metrics
         status = "ok" if r.ok else (r.error or "failed").splitlines()[0][:40]
@@ -161,7 +162,8 @@ def plan(
         cfgs = result.feasible.get(name, [])
         t = Table(title=f"{name}: {len(cfgs)}/{result.considered.get(name, 0)} feasible")
         for col in ("config", "weights GiB", "kv GiB", "workspace GiB", "margin GiB", "total GiB", "budget GiB"):
-            t.add_column(col, justify="right" if col != "config" else "left")
+            t.add_column(col, justify="right" if col != "config" else "left", overflow="fold",
+                         min_width=(40 if col == "config" else None))
         for c, e in cfgs:
             t.add_row(c.key(), f"{e.weights / GiB:.2f}", f"{e.kv_cache / GiB:.2f}", f"{e.runtime_workspace / GiB:.2f}",
                       f"{e.safety_margin / GiB:.2f}", f"{e.total / GiB:.2f}", f"{e.budget / GiB:.2f}")

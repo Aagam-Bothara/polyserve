@@ -19,6 +19,10 @@ def _res(key: str, tok_s: float, ttft, jpt=None, ok=True, quant="bf16") -> Trial
     return TrialResult(config=cfg, stage="t", metrics=m, error=None if ok else "boom")
 
 
+def _relaxed(notes):
+    return any(("least-violating" in n) or ("no energy" in n) for n in notes)
+
+
 RESULTS = [
     _res("16", tok_s=800, ttft=120, jpt=0.30),
     _res("64", tok_s=1500, ttft=400, jpt=0.20),
@@ -29,12 +33,12 @@ RESULTS = [
 
 def test_throughput_is_plain_argmax():
     w, notes = pick(RESULTS, "throughput")
-    assert w.config.batch == 256 and notes == []
+    assert w.config.batch == 256 and not _relaxed(notes)
 
 
 def test_balanced_respects_ttft_ceiling():
     w, notes = pick(RESULTS, "balanced", Constraints(ttft_ceiling_ms=500))
-    assert w.config.batch == 64 and notes == []
+    assert w.config.batch == 64 and not _relaxed(notes)
 
 
 def test_balanced_relaxes_when_nothing_fits():
@@ -53,7 +57,7 @@ def test_latency_min_ttft_subject_to_floor():
 
 def test_efficiency_min_joules_subject_to_floor():
     w, notes = pick(RESULTS, "efficiency", Constraints(tok_s_floor_abs=1000))
-    assert w.config.batch == 256 and notes == []
+    assert w.config.batch == 256 and not _relaxed(notes)
 
 
 def test_efficiency_without_energy_falls_back_to_tok_s():
@@ -100,11 +104,43 @@ def _feasible_a100(hw_a100, prepared_vllm) -> List[Config]:
     return [c for c, _ in plan(hw_a100, prepared_vllm, be.candidate_configs(hw_a100, prepared_vllm), be.memory_model(hw_a100))]
 
 
-def test_baseline_is_the_median_config():
+def test_baseline_is_median_ctx_batch_with_largest_memory():
     cfgs = [Config(backend="vllm", quant="bf16", ctx=c, batch=b, gpu_memory_utilization=g)
             for c in (2048, 4096, 8192) for b in (16, 64, 256) for g in (0.8, 0.9, 0.95)]
     b = _baseline(cfgs)
-    assert (b.ctx, b.batch, b.gpu_memory_utilization) == (4096, 64, 0.9)
+    assert (b.ctx, b.batch, b.gpu_memory_utilization) == (4096, 64, 0.95)
+    lc = [Config(backend="llamacpp-cuda", quant="Q4_K_M", ctx=4096, batch=4, n_gpu_layers=n) for n in (18, 27, 37)]
+    assert _baseline(lc).n_gpu_layers == 37  # full offload, not the median
+
+
+def test_objective_scores_each_trial_at_its_best_level():
+    def res(batch, levels):
+        cfg = Config(backend="vllm", quant="bf16", ctx=4096, batch=batch, gpu_memory_utilization=0.9)
+        by = {str(c): TrialMetrics(tok_s=t, ttft_ms=ttft, concurrency=c, requests=16, output_tokens=100)
+              for c, t, ttft in levels}
+        best = max(by.values(), key=lambda m: m.tok_s)
+        return TrialResult(config=cfg, stage="t", metrics=TrialMetrics(
+            tok_s=best.tok_s, ttft_ms=best.ttft_ms, requests=48, output_tokens=300, by_concurrency=by))
+    # Config A: fastest at c=8 but TTFT blows the ceiling there; fine at c=4.
+    a = res(16, [(1, 200, 40), (4, 600, 120), (8, 900, 2000)])
+    # Config B: slower everywhere but always under the ceiling.
+    b = res(64, [(1, 180, 40), (4, 500, 100), (8, 650, 300)])
+    from polyserve.calibrate.objectives import rank
+    ranked = rank([a, b], "balanced", Constraints(ttft_ceiling_ms=500, noise_tolerance=0))
+    assert ranked[0].result is b and ranked[0].concurrency == 8  # 650 @ c8 beats A's 600 @ c4
+    assert ranked[1].concurrency == 4  # A scored at its best feasible level, not its fastest
+    w, notes = pick([a, b], "throughput")
+    assert w is a and any("concurrency 8" in n for n in notes)
+
+
+def test_noise_tolerance_prefers_larger_context():
+    small = _res("64", tok_s=1064.7, ttft=31)
+    big = _res("64", tok_s=1053.3, ttft=32)
+    big.config.ctx = 8192
+    w, _ = pick([small, big], "throughput", Constraints(noise_tolerance=0.02))
+    assert w is big
+    w, _ = pick([small, big], "throughput", Constraints(noise_tolerance=0.0))
+    assert w is small
 
 
 def test_staged_search_runs_stages_and_dedups(hw_a100, prepared_vllm):
@@ -114,7 +150,9 @@ def test_staged_search_runs_stages_and_dedups(hw_a100, prepared_vllm):
     winner, notes = search.run(feasible)
     assert winner is not None
     stages = [r.stage for r in search.results]
-    assert stages.count("quant") == 2  # bf16 and fp8
+    # Stage 1 tries gmu 0.95 first (fails: simulated OOM) then 0.90 for each of bf16 and fp8.
+    assert stages.count("quant") == 4
+    assert sum(1 for r in search.results if r.stage == "quant" and r.ok) == 2
     assert "memory" in stages and "batch" in stages
     assert len(runner.calls) == len(set(runner.calls))  # no config run twice
     assert len(runner.calls) < len(feasible) / 3  # staged, not a grid
@@ -130,7 +168,7 @@ def test_staged_search_balanced_uses_ceiling(hw_a100, prepared_vllm):
     search = StagedSearch(objective="balanced", runner=FakeRunner(), constraints=Constraints(ttft_ceiling_ms=300))
     winner, notes = search.run(feasible)
     assert winner.metrics.ttft_ms <= 300
-    assert winner.config.batch == 64 and notes == []
+    assert winner.config.batch == 64 and not _relaxed(notes)
 
 
 def test_staged_search_keeps_top_two_quants_only(hw_gtx1080, prepared_llamacpp):

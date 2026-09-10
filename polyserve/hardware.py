@@ -286,7 +286,10 @@ def probe_backends(gpus: List[GPUInfo]) -> Dict[str, BackendAvailability]:
         name="vllm-cpu",
         available=bool(vllm_importable and torch_cuda is False),
         version=vllm_ver,
-        reason=None if vllm_importable else "vllm not importable",
+        reason=(
+            "vllm not importable" if not vllm_importable
+            else ("torch is a CUDA build; vLLM-CPU needs the CPU wheel" if torch_cuda else None)
+        ),
     )
 
     sgl_ver = _pkg_version("sglang")

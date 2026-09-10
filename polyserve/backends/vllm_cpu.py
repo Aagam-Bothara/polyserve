@@ -57,7 +57,6 @@ class VllmCpuBackend(VllmBackend):
             "--max-model-len", str(cfg.ctx),
             "--max-num-seqs", str(cfg.batch),
             "--dtype", "bfloat16",
-            "--disable-log-requests",
         ]
         if model.spec.revision:
             args += ["--revision", model.spec.revision]

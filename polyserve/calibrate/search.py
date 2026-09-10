@@ -97,10 +97,23 @@ def _memory_knob(cfg: Config) -> float:
     return 0.0
 
 
+def _baseline_candidates(group: Sequence[Config]) -> List[Config]:
+    """Stage-1 baselines for a (backend, quant) group: median ctx and batch, memory knob largest first.
+
+    The planner already vetted every config here, so the largest memory setting (full GPU
+    offload, highest gpu_memory_utilization) is the fair one to compare quants at; the
+    smaller ones are fallbacks if that launch fails.
+    """
+    ctxs = sorted({c.ctx for c in group})
+    batches = sorted({c.batch for c in group})
+    ctx = ctxs[len(ctxs) // 2]
+    batch = batches[len(batches) // 2]
+    same = [c for c in group if c.ctx == ctx and c.batch == batch]
+    return sorted(same, key=lambda c: (_memory_knob(c), c.n_batch or 0), reverse=True)
+
+
 def _baseline(group: Sequence[Config]) -> Config:
-    """Middle-of-the-road config in a (backend, quant) group: median ctx, median batch, median memory."""
-    ordered = sorted(group, key=lambda c: (c.ctx, c.batch, _memory_knob(c), c.n_batch or 0))
-    return ordered[len(ordered) // 2]
+    return _baseline_candidates(group)[0]
 
 
 @dataclass
@@ -141,7 +154,12 @@ class StagedSearch:
             groups.setdefault((c.backend, c.quant), []).append(c)
         stage_results: Dict[Tuple[str, str], TrialResult] = {}
         for key, group in groups.items():
-            stage_results[key] = self._run(_baseline(group), "quant")
+            # Largest memory setting first; step down only if the launch itself fails.
+            for cfg in _baseline_candidates(group)[: self.max_memory_trials_per_quant]:
+                res = self._run(cfg, "quant")
+                stage_results[key] = res
+                if res.launched:
+                    break
         ok = [r for r in stage_results.values() if r.ok]
         from polyserve.calibrate.objectives import rank
 
@@ -154,7 +172,10 @@ class StagedSearch:
         chosen: Dict[Tuple[str, str], Config] = {}
         for key in kept:
             group = [c for c in feasible if (c.backend, c.quant) == key]
-            base = _baseline(group)
+            base = next(
+                (r.config for r in self.results if r.ok and (r.config.backend, r.config.quant) == key),
+                _baseline(group),
+            )
             # Fix batch to the baseline's; vary memory knob and ctx, largest first.
             same_batch = [c for c in group if c.batch == base.batch and (c.n_batch == base.n_batch)]
             ordered = sorted(same_batch, key=lambda c: (_memory_knob(c), c.ctx), reverse=True)

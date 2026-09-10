@@ -124,7 +124,6 @@ class VllmBackend(BaseBackend):
             "--port", str(port),
             "--max-model-len", str(cfg.ctx),
             "--max-num-seqs", str(cfg.batch),
-            "--disable-log-requests",
         ]
         if cfg.gpu_memory_utilization is not None:
             args += ["--gpu-memory-utilization", f"{cfg.gpu_memory_utilization:.2f}"]
