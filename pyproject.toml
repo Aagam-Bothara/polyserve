@@ -34,7 +34,9 @@ dependencies = [
 
 [project.optional-dependencies]
 nvml = ["nvidia-ml-py>=12.535.133"]
-llmtrace = ["llmtrace>=0.2.0"]
+# NOTE: the name "llmtrace" on PyPI is an unrelated observability package. This extra points at
+# the tracer PolyServe actually uses; install it from git so pip can never resolve a stranger's code.
+llmtrace = ["llmtrace @ git+https://github.com/Aagam-Bothara/llmtrace.git"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.1"]
 
 [project.scripts]

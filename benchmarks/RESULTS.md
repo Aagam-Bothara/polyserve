@@ -1,9 +1,12 @@
 # PolyServe benchmark results
 
-Across 6 GPU/model/workload combinations, PolyServe improves throughput by a median of +51% (range +7% to +67%) over the best stock/default configuration that satisfies the requested latency SLO, winning 6 of 6.
+Across 6 machine/model/workload combinations, PolyServe improves throughput by a median of +51% (range +7% to +67%) over the best stock/default configuration that satisfies the requested latency SLO, winning 6 of 6.
+
+1 combination excluded from the headline because the baseline or PolyServe missed the SLO (shown below, marked).
 
 | machine | model | workload | PolyServe pick | tok/s | best default | tok/s | gain | TTFT Δ | J/tok gain | calib |
 |---|---|---|---|---|---|---|---|---|---|---|
+| Intel(R) Core(TM) i5-14600KF | Qwen/Qwen2.5-0.5B-Instruct | default ⚠ | llamacpp-cpu/Q4_K_M/ctx8192/b8/ngl0/nb512 | 158 | llamacpp-cpu-default | 49 | +224% | -594 ms | -% | 1390s / 16 |
 | NVIDIA GeForce RTX 3090 | Qwen/Qwen2.5-3B-Instruct | chat | vllm/fp8/ctx8192/b64/gmu0.95 | 1091 | vllm-default | 653 | +67% | -3 ms | +42% | 399s / 10 |
 | NVIDIA GeForce RTX 3090 | Qwen/Qwen2.5-3B-Instruct | default | vllm/fp8/ctx8192/b64/gmu0.95 | 1097 | vllm-default | 687 | +60% | -8 ms | +38% | 480s / 10 |
 | NVIDIA GeForce RTX 3090 | Qwen/Qwen2.5-3B-Instruct | generation | vllm/fp8/ctx8192/b16/gmu0.95 | 1111 | vllm-default | 683 | +63% | -7 ms | +38% | 1937s / 10 |
@@ -17,15 +20,23 @@ Across 6 GPU/model/workload combinations, PolyServe improves throughput by a med
 
 | backend | scored on | trials | measured | MAPE | bias | worst under | worst over | weights MAPE | workspace now → fitted (p95) | KV pool vs budget | OOMs | margin now → recommended |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
+| llamacpp-cpu | peak device | 2 | 2 | 33.2% | +33.2% | +0.0% | +45.8% | -% | 512 → 214 MB | - | 0 | 5.0% → 2.0% |
 | llamacpp-cuda | peak device | 6 | 6 | 23.1% | +23.1% | +0.0% | +23.4% | -% | 768 → 225 MB | - | 0 | 5.0% → 2.0% |
 | vllm | weights+workspace | 12 | 10 | 9.0% | -3.8% | -12.9% | +12.3% | 6.0% | 1536 → 2588 MB | 1.1x | 0 | 5.0% → 14.9% |
 
-Across 16 measured trials (18 planned) the planner predicts its target quantity within 14.3% on average; worst under-prediction -12.9%; 0 OOMs among planner-feasible configs.
+Across 18 measured trials (20 planned) the planner predicts its target quantity within 16.4% on average; worst under-prediction -12.9%; 0 OOMs among planner-feasible configs.
 
 Reservation backends (vLLM, SGLang) size their KV pool to fill `gpu_memory_utilization x VRAM`, so their peak is a policy choice, not a requirement: they are scored on weights + workspace, and the KV column shows how much larger the pool they allocated was than the planner budgeted. llama.cpp allocates exactly what it is asked for, so it is scored on peak device memory. Negative bias means the planner under-predicts; the recommended margin is the worst under-prediction plus 2%, clamped to [2%, 15%], with the 512 MB floor unchanged.
 
 
 ## Per-combination detail
+
+**Intel(R) Core(TM) i5-14600KF** · Qwen/Qwen2.5-0.5B-Instruct · workload `default` · objective `balanced` (TTFT ≤ 500 ms)
+
+| runtime / config | tok/s | TTFT p50 | TTFT p95 | TPOT | peak mem | W | J/tok | SLO | calib |
+|---|---|---|---|---|---|---|---|---|---|
+| **PolyServe** → llamacpp-cpu/Q4_K_M/ctx8192/b8/ngl0/nb512 | 158 @c8 | 48 | 54 | 50.6 | 1.4 GB | - | - | yes | 1390s / 16 |
+| llamacpp-cpu-default (llamacpp-cpu/Q4_K_M/ctx4096/b1/ngl0/nb2048) | 49 @c1 | 642 | 790 | 15.4 | 0.7 GB | - | - | no | - |
 
 **NVIDIA GeForce RTX 3090** · Qwen/Qwen2.5-3B-Instruct · workload `chat` · objective `balanced` (TTFT ≤ 500 ms)
 

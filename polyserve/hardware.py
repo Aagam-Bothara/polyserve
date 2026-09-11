@@ -156,11 +156,31 @@ def _probe_gpus_nvidia_smi() -> List[GPUInfo]:
     return gpus
 
 
+def visible_gpus(gpus: List[GPUInfo]) -> List[GPUInfo]:
+    """Apply CUDA_VISIBLE_DEVICES, which NVML ignores but every backend obeys.
+
+    Without this the probe reports a GPU that vLLM and llama.cpp cannot actually use, the
+    selector picks a CUDA backend, and the launch fails. An empty or "-1" value means the
+    machine is CPU-only as far as the backends are concerned.
+    """
+    env = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if env is None:
+        return gpus
+    wanted = [t.strip() for t in env.split(",") if t.strip()]
+    if not wanted or wanted == ["-1"]:
+        return []
+    out = []
+    for g in gpus:
+        if str(g.index) in wanted or (g.uuid and any(g.uuid == w or g.uuid.startswith(w) for w in wanted)):
+            out.append(g)
+    return out
+
+
 def probe_gpus() -> List[GPUInfo]:
     for fn in (_probe_gpus_pynvml, _probe_gpus_torch, _probe_gpus_nvidia_smi):
         gpus = fn()
         if gpus:
-            return gpus
+            return visible_gpus(gpus)
     return []
 
 
@@ -275,11 +295,19 @@ def probe_backends(gpus: List[GPUInfo]) -> Dict[str, BackendAvailability]:
     vllm_ver = _pkg_version("vllm")
     vllm_importable = importlib.util.find_spec("vllm") is not None
     torch_cuda = _torch_is_cuda_build()
+    if not vllm_importable:
+        vllm_reason = "vllm not importable"
+    elif not has_nvidia:
+        vllm_reason = "no usable NVIDIA GPU (check CUDA_VISIBLE_DEVICES)"
+    elif torch_cuda is False:
+        vllm_reason = "torch is a CPU build"
+    else:
+        vllm_reason = None
     out["vllm"] = BackendAvailability(
         name="vllm",
         available=bool(vllm_importable and has_nvidia and torch_cuda is not False),
         version=vllm_ver,
-        reason=None if vllm_importable else "vllm not importable",
+        reason=vllm_reason,
     )
     # vLLM-CPU: the same package built against a CPU-only torch.
     out["vllm-cpu"] = BackendAvailability(
@@ -298,7 +326,8 @@ def probe_backends(gpus: List[GPUInfo]) -> Dict[str, BackendAvailability]:
         name="sglang",
         available=bool(sgl_importable and has_nvidia),
         version=sgl_ver,
-        reason=None if sgl_importable else "sglang not importable",
+        reason=("sglang not importable" if not sgl_importable
+                else ("no usable NVIDIA GPU (check CUDA_VISIBLE_DEVICES)" if not has_nvidia else None)),
     )
 
     binary = llama_server_binary()

@@ -1,0 +1,98 @@
+{
+  "hardware_hash": "4664ef513377f583",
+  "gpu": "NVIDIA GeForce RTX 3090",
+  "model_id": "Qwen/Qwen2.5-3B-Instruct",
+  "workload": "default",
+  "objective": "balanced",
+  "ttft_ceiling_ms": 500.0,
+  "workload_spec": {
+    "name": "default",
+    "n_prompts": 16,
+    "prefill_tokens": 256,
+    "decode_tokens": 128,
+    "concurrencies": [
+      1,
+      4,
+      8
+    ],
+    "ttft_ceiling_ms": 500.0,
+    "seed": 0
+  },
+  "rows": [
+    {
+      "label": "vllm-default",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 32768,
+        "batch": 256,
+        "gpu_memory_utilization": 0.9,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "kv_dtype": "auto",
+        "extra": {}
+      },
+      "config_key": "vllm/bf16/ctx32768/b256/gmu0.90",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 721.0173463404099,
+      "ttft_ms": 35.950454883277416,
+      "ttft_p95_ms": 39.48431648313999,
+      "tpot_ms": 10.775967164691098,
+      "joules_per_token": 0.4684086098644016,
+      "peak_mem_mb": 23287.0,
+      "meets_slo": true,
+      "token_count_source": "usage"
+    },
+    {
+      "label": "vllm-fp8-default",
+      "config": {
+        "backend": "vllm",
+        "quant": "fp8",
+        "ctx": 32768,
+        "batch": 256,
+        "gpu_memory_utilization": 0.9,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "kv_dtype": "auto",
+        "extra": {}
+      },
+      "config_key": "vllm/fp8/ctx32768/b256/gmu0.90",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 1139.4006912284874,
+      "ttft_ms": 27.246244251728058,
+      "ttft_p95_ms": 33.95618498325348,
+      "tpot_ms": 6.739677715584577,
+      "joules_per_token": 0.2831705382849932,
+      "peak_mem_mb": 23397.0,
+      "meets_slo": true,
+      "token_count_source": "usage"
+    },
+    {
+      "label": "polyserve",
+      "config": {
+        "backend": "vllm",
+        "quant": "fp8",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "kv_dtype": "auto",
+        "extra": {}
+      },
+      "config_key": "vllm/fp8/ctx8192/b64/gmu0.95",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 1118.459247927859,
+      "ttft_ms": 32.228210009634495,
+      "ttft_p95_ms": 40.958963334560394,
+      "tpot_ms": 6.7797915205198125,
+      "joules_per_token": 0.29957559073446516,
+      "peak_mem_mb": 23957.0,
+      "meets_slo": true,
+      "token_count_source": "usage"
+    }
+  ]
+}

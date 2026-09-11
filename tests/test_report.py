@@ -80,7 +80,7 @@ def test_summary_headline_and_markdown():
     assert gains == [-20, 50, 60]
     assert s.median_gain() == 50.0 and s.wins() == (2, 3)
     head = s.headline()
-    assert "3 GPU/model/workload combinations" in head and "+50%" in head and "winning 2 of 3" in head
+    assert "3 machine/model/workload combinations" in head and "+50%" in head and "winning 2 of 3" in head
     md = render_markdown(s)
     assert "| A100 | m/a | chat |" in md and "PolyServe failed" in md and "+50%" in md
     assert "600s / 10" in md and "+38%" in md  # energy gain (0.8 -> 0.5)

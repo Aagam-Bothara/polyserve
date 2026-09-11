@@ -3,7 +3,7 @@
 **PolyServe helps you run LLMs on your own hardware without tuning an inference backend by hand.** Give it a model, and it checks your machine, benchmarks the available options, and serves the chosen configuration through an OpenAI-compatible API.
 
 ```bash
-pip install polyserve
+pip install git+https://github.com/Aagam-Bothara/polyserve.git   # not yet on PyPI
 polyserve serve meta-llama/Llama-3.2-3B-Instruct            # --objective balanced
 curl localhost:8000/v1/chat/completions -d '{"model":"meta-llama/Llama-3.2-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -17,18 +17,18 @@ PolyServe works with vLLM, SGLang and llama.cpp. It handles the setup questions 
 
 ## Supported hardware (v1)
 
-| Hardware | Backends tried |
-|---|---|
-| NVIDIA, compute capability ≥ 7.5 (Turing and newer) | vLLM, SGLang, llama.cpp (CUDA) |
-| NVIDIA, compute capability < 7.5 (Pascal, Volta) | llama.cpp (CUDA) |
-| x86 CPU | llama.cpp; vLLM-CPU if AVX-512 is present |
+| Hardware | Backends tried | Status |
+|---|---|---|
+| NVIDIA, compute capability ≥ 7.5 (Turing and newer) | vLLM, SGLang, llama.cpp (CUDA) | vLLM and llama.cpp **benchmarked** on an RTX 3090; SGLang implemented, **never benchmarked** |
+| NVIDIA, compute capability < 7.5 (Pascal, Volta) | llama.cpp (CUDA) | implemented, **never benchmarked** |
+| x86 CPU | llama.cpp; vLLM-CPU if AVX-512 is present | implemented, **never benchmarked** |
 
 PolyServe runs on Linux with Python 3.10–3.13. The table above lists the backend candidates for each type of hardware; the benchmarks below show what has been measured so far.
 
 Install the backends you want to try. PolyServe starts each one as a separate process and supplies the settings it has tuned:
 
 ```bash
-pip install polyserve[nvml]          # + NVML telemetry (power, utilisation) for calibration
+pip install "polyserve[nvml] @ git+https://github.com/Aagam-Bothara/polyserve.git"   # + NVML telemetry
 pip install "vllm==0.11.0" "transformers>=4.56,<5"   # vLLM 0.11 breaks on transformers 5.x
 pip install sglang                   # optional
 export LLAMA_SERVER=/path/to/llama-server   # build llama.cpp with -DGGML_CUDA=ON; optional if on PATH
@@ -136,7 +136,9 @@ All rows measured on one RTX 3090 (24 GB, cc 8.6) with vLLM 0.11.0, llama.cpp CU
 
 ### Qwen2.5-3B-Instruct, `--objective balanced`
 
-> Across 6 GPU/model/workload combinations, PolyServe improves throughput by a median of **+51%** (range +7% to +67%) over the best stock/default configuration that satisfies the requested latency SLO, winning 6 of 6.
+> On **one RTX 3090 with one model (Qwen2.5-3B-Instruct) across six workloads**, PolyServe improves throughput by a median of **+51%** (range +7% to +67%) over the best stock/default configuration that satisfies the requested latency SLO, winning 6 of 6.
+
+**Read this before the table: on the GPU, this number is quantisation, not tuning.** PolyServe picked vLLM with fp8 weights in all six rows, and the baseline is vLLM's 16-bit default. A separate experiment ([below](#what-the-search-actually-contributes)) runs stock vLLM with `--quantization fp8` and nothing else tuned, and finds it captures essentially the whole gain: the configuration search adds **−1.8% to +0.9%** on top of it. The defensible claim is that PolyServe automatically finds a precision the stock defaults leave on the table, not that its search finds a better configuration. On CPU, where there is no such precision to pick, the picture reverses and the search is worth **+224%**.
 
 | workload | PolyServe pick | tok/s | best default meeting SLO | tok/s | gain | TTFT Δ | J/token gain | calibration |
 |---|---|---|---|---|---|---|---|---|
@@ -147,9 +149,40 @@ All rows measured on one RTX 3090 (24 GB, cc 8.6) with vLLM 0.11.0, llama.cpp CU
 | `rag` | vLLM fp8, ctx 16384, batch 64 | **705** | vLLM defaults | 504 | **+40%** | −23 ms | +30% | 370 s / 8 trials |
 | `high-concurrency` | vLLM fp8, ctx 8192, batch 64 | **3628** | vLLM defaults | 3404 | **+7%** | −126 ms | +6% | 730 s / 10 trials |
 
-In every row PolyServe improved throughput and reduced time to first token, so none of the gain is bought by spending latency. Calibrating all six workloads cost 71 minutes on this card, paid once and cached.
+No row trades latency for throughput, but the latency picture is uneven and the p50 column above hides it. Four of the six rows differ by 1 to 8 ms at p50, which is within run-to-run noise. Two are real: `high-concurrency` is 156 ms against 282 ms at p50 and 203 ms against 1973 ms at p95, and `rag` gains 23 ms. One p95 is worse: `long-context` at 98.1 ms against the baseline's 90.0 ms. Calibrating all six workloads cost 71 minutes on this card, paid once and cached.
 
 **What made the difference?** Most of the gain came from choosing fp8 over vLLM's default bf16 on Ampere, and matching batch and context sizes to the workload instead of using the model's 32k maximum. The benefit was smaller at high concurrency: with 128 concurrent clients, stock vLLM already kept the card busy. Throughput improved by 7%, while time to first token fell from 276 ms to 142 ms. Under the same load, llama.cpp and Ollama missed the latency target, with first-token waits of 9.6 s and 17 s respectively, because their defaults served one request at a time.
+
+### What the search actually contributes
+
+Measured back to back on one RTX 3090, `benchmarks/isolate_quantisation.py`, raw data in [benchmarks/isolation/](benchmarks/isolation/):
+
+| workload | stock bf16 | stock fp8 | PolyServe | gain from quantisation | gain from the search |
+|---|---|---|---|---|---|
+| `default` | 721 | 1139 | 1118 | **+58.0%** | −1.8% |
+| `chat` | 716 | 1108 | 1118 | **+54.9%** | +0.9% |
+| `high-concurrency` | 3725 | 3868 | 3867 | **+3.8%** | −0.0% |
+
+On this GPU the search contributes nothing measurable once fp8 is chosen; all three deltas sit inside run-to-run noise of about ±2%. Choosing fp8 is still a decision stock vLLM does not make for you, and PolyServe makes it automatically and verifies it by measurement, but that is a narrower claim than "tuned configuration".
+
+**Where the search does earn its keep: CPU.** With the GPU masked, the selector falls back to llama.cpp on CPU, and both sides run the same Q4_K_M weights, so quantisation is held constant:
+
+| machine | PolyServe pick | tok/s | stock llama.cpp | tok/s | gain | TTFT |
+|---|---|---|---|---|---|---|
+| Intel i5-14600KF, CPU only, Qwen2.5-0.5B | Q4_K_M, ctx 8192, **8 slots** | **158** | Q4_K_M, ctx 4096, **1 slot** | 49 | **+224%** | 48 ms vs 642 ms |
+
+Same backend, same quantisation, 3.2× the throughput and an SLO the default misses, purely from serving 8 requests concurrently instead of 1. This row is excluded from the headline above precisely because the baseline misses the latency target, which is the rule the report applies everywhere.
+
+### Does fp8 cost quality?
+
+Throughput across precisions is not like-for-like unless quality holds, so `benchmarks/quality_check.py` measures perplexity on identical held-out sequences (24 × 1024 tokens) through the same engine:
+
+| precision | perplexity | change |
+|---|---|---|
+| bf16 | 5.2784 | baseline |
+| fp8 | 5.3367 | **+1.10%** |
+
+fp8 is not free: roughly 55% more throughput for about 1% worse perplexity on this model. Perplexity is a weak proxy for task quality; a task-level check (GSM8K, for instance) is still missing.
 
 ### Memory planner accuracy
 
@@ -160,7 +193,9 @@ Each trial compares the planner's memory estimate with actual allocations report
 | vLLM | weights + workspace | 42 | **6.9%** | +3.1% | −12.9% | 0 |
 | llama.cpp (CUDA) | peak device memory | 32 | **16.6%** | +16.6% | 0.0% | 0 |
 
-Across 66 measured trials the planner predicts its target within **11.6%** on average, worst under-prediction −12.9%, and **zero out-of-memory failures among the configurations it admitted**. That last number is the one the planner is judged on: an admitted config that then OOMs is a planner failure regardless of average error.
+Across 66 measured trials the planner predicts its target within **11.6%** on average, worst under-prediction −12.9%, and **zero out-of-memory failures among the configurations it admitted**.
+
+*Scope, because the two files differ on purpose.* The table above is `polyserve memory-report`, which reads every calibration trial plus the comparison rows (66 trials). [benchmarks/RESULTS.md](benchmarks/RESULTS.md) reports the same metric over the comparison rows alone (16 trials), because that file must be reproducible from [benchmarks/results/](benchmarks/results/) by anyone who clones the repo. On the smaller subset the figures are 14.3% mean error and a −3.8% vLLM bias, and the KV-pool ratio falls to 1.1x because stock vLLM asks for 32k context at batch 256 and therefore budgets a pool nearly as large as the one it allocates. **The planner under-predicts vLLM's non-KV memory in the worst case by 12.9%, so `--apply` raises its safety margin from 5% to 14.9%** rather than lowering it; only llama.cpp's margin drops, to 2%. That last number is the one the planner is judged on: an admitted config that then OOMs is a planner failure regardless of average error.
 
 The two backends are scored on different quantities on purpose. vLLM and SGLang size their KV pool to fill `gpu_memory_utilization × VRAM`, so their peak memory is a policy choice, not a requirement; scoring against it compares two different things. In this run vLLM's KV pool was **7.7× larger** than the planner budgeted, which is why the conservative `PAGED_KV_FRACTION` never rejected a workable config. llama.cpp allocates exactly what it is asked for, so it is scored on peak memory; its error is entirely over-prediction, traced to a hand-set 768 MB workspace constant against the 253 MB `polyserve memory-report --apply` fitted from these trials.
 
@@ -179,7 +214,12 @@ The predictor still has limits. The fitted bandwidth and compute efficiencies re
 
 ### Not yet measured
 
-These runs did not include an A100, A30, GTX 1080, a CPU-only setup, or a second model size. Those measurements are still needed. The matrix in [benchmarks/README.md](benchmarks/README.md) tracks the planned runs; its cells are placeholders until results are available.
+These are gaps, not claims. In rough order of how much they would change the conclusions:
+
+1. **A task-level quality check.** Perplexity moved 1.1% at fp8, which is small, but perplexity is a weak proxy. GSM8K or a similar task-level benchmark at both precisions would say whether that 1.1% matters.
+2. **A second model size.** Everything here is 3B on GPU and 0.5B on CPU. A 7B or 8B model on 24 GB is where the memory planner actually binds, and where the search may contribute more than it does at 3B.
+3. **Other accelerators.** A100, A30 and a pre-Turing card (GTX 1080) are untested, so the compute-capability branch in the selector has never run on real hardware. SGLang is implemented and has never been benchmarked at all.
+4. **Whether the search helps on GPU at all.** The isolation experiment says it does not, on one card with one model at three workloads. Finding out whether that holds on a card where memory is tight, or is an artifact of a 3B model on 24 GB, is the most interesting open question in this repository.
 
 ## Backend interface
 

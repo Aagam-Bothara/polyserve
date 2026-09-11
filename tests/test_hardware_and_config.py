@@ -43,3 +43,33 @@ def test_arch_nested_text_config():
 
 def test_dtype_bytes():
     assert dtype_bytes("bfloat16") == 2 and dtype_bytes("fp8") == 1 and dtype_bytes("float32") == 4
+
+
+def test_cuda_visible_devices_is_honoured(monkeypatch):
+    """NVML enumerates physical devices regardless of CUDA_VISIBLE_DEVICES; the backends do not."""
+    from polyserve.hardware import visible_gpus
+    from polyserve.models import GPUInfo
+
+    gpus = [GPUInfo(vendor="nvidia", name="A", index=0, uuid="GPU-aaa"),
+            GPUInfo(vendor="nvidia", name="B", index=1, uuid="GPU-bbb")]
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    assert visible_gpus(gpus) == gpus
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    assert visible_gpus(gpus) == []          # CPU-only as far as any backend is concerned
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "-1")
+    assert visible_gpus(gpus) == []
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    assert [g.name for g in visible_gpus(gpus)] == ["B"]
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-aaa")
+    assert [g.name for g in visible_gpus(gpus)] == ["A"]
+
+
+def test_backend_reasons_explain_a_masked_gpu(monkeypatch):
+    """With no visible GPU an installed vLLM must say why, not report an empty reason."""
+    from polyserve.hardware import probe_backends
+
+    monkeypatch.setattr("importlib.util.find_spec", lambda name: object() if name in ("vllm", "sglang") else None)
+    monkeypatch.setattr("polyserve.hardware._torch_is_cuda_build", lambda: True)
+    out = probe_backends([])  # no visible GPUs
+    assert not out["vllm"].available and "NVIDIA" in out["vllm"].reason
+    assert not out["sglang"].available and "NVIDIA" in out["sglang"].reason

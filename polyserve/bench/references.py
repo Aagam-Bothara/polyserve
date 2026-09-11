@@ -36,6 +36,12 @@ def reference_configs(hw: HardwareDescriptor, prepared: Dict[str, PreparedModel]
             out[f"{name}-default"] = Config(
                 backend=name, quant=backend.precisions(hw)[0], ctx=max_pos, batch=256, gpu_memory_utilization=0.90
             )
+            # `vllm serve <model> --quantization fp8` and nothing else: isolates what the search adds
+            # beyond simply picking 8-bit weights, which is otherwise the bulk of the measured gain.
+            if "fp8" in backend.precisions(hw) and "fp8" in model.weights_bytes:
+                out[f"{name}-fp8-default"] = Config(
+                    backend=name, quant="fp8", ctx=max_pos, batch=256, gpu_memory_utilization=0.90
+                )
         elif name == "sglang":
             # `python -m sglang.launch_server --model-path <model>`: context = model max, mem-fraction ~0.88
             out[f"{name}-default"] = Config(

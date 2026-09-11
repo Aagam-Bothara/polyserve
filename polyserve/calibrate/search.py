@@ -99,6 +99,8 @@ class SubprocessTrialRunner:
             err = None
             if not metrics.ok:
                 err = f"{metrics.failed}/{metrics.requests} requests failed"
+            elif metrics.failed:
+                logger.info("%s: tolerated %d/%d failed requests", cfg.key(), metrics.failed, metrics.requests)
             return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err, memory=observation)
         except Exception as exc:
             logger.exception("trial %s crashed", cfg.key())

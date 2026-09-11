@@ -7,7 +7,7 @@ profile cache and printed by the CLI without importing any backend.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -208,9 +208,16 @@ class TrialMetrics(BaseModel):
     prompt_tokens: int = 0  # mean measured prompt length (0 if no tokenizer)
     by_concurrency: Dict[str, "TrialMetrics"] = Field(default_factory=dict)
 
+    # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
+    # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails
+    # everything, not 2 requests in 48.
+    FAILURE_TOLERANCE: ClassVar[float] = 0.10
+
     @property
     def ok(self) -> bool:
-        return self.requests > 0 and self.failed == 0 and self.output_tokens > 0
+        if self.requests <= 0 or self.output_tokens <= 0:
+            return False
+        return self.failed <= self.FAILURE_TOLERANCE * self.requests
 
 
 class MemoryObservation(BaseModel):

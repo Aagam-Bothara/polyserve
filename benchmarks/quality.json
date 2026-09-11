@@ -1,0 +1,14 @@
+{
+  "model": "Qwen/Qwen2.5-3B-Instruct",
+  "sequences": 24,
+  "seq_len": 1024,
+  "corpus": "https://www.gutenberg.org/files/11/11-0.txt",
+  "perplexity": {
+    "bf16": 5.278428333983597,
+    "fp8": 5.336696738412242
+  },
+  "delta_pct": {
+    "bf16": 0.0,
+    "fp8": 1.103896856067958
+  }
+}

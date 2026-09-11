@@ -26,7 +26,11 @@ def test_reference_configs_are_stock_defaults(hw_a100, spec):
     candidates, reg = select(hw_a100, spec)
     planned = prepare_and_plan(hw_a100, spec, candidates, reg)
     refs = reference_configs(hw_a100, planned.prepared, reg)
-    assert set(refs) == {"vllm-default", "sglang-default", "llamacpp-cuda-default"}
+    # fp8 is offered on this GPU, so the stock-fp8 row exists to separate "8-bit beat 16-bit"
+    # from "the search found a better configuration".
+    assert set(refs) == {"vllm-default", "vllm-fp8-default", "sglang-default", "llamacpp-cuda-default"}
+    f8 = refs["vllm-fp8-default"]
+    assert f8.quant == "fp8" and f8.ctx == 131072 and f8.batch == 256 and f8.gpu_memory_utilization == 0.90
     v = refs["vllm-default"]
     assert v.ctx == 131072 and v.batch == 256 and v.gpu_memory_utilization == 0.90 and v.quant == "bf16"
     lc = refs["llamacpp-cuda-default"]
@@ -76,7 +80,7 @@ def test_compare_measures_polyserve_and_references(tmp_path, hw_a100, spec):
     result = compare(hw_a100, spec, profile, planned.prepared, reg, workload=get_workload("default"),
                      runner=CompareRunner(), progress=lambda label, row: seen.append((label, row is not None)))
     labels = [r.label for r in result.rows]
-    assert labels == ["polyserve", "vllm-default"]
+    assert labels == ["polyserve", "vllm-default", "vllm-fp8-default"]
     ps = result.polyserve_row
     assert ps.ok and ps.scored_concurrency in (1, 4, 8) and ps.meets_slo is not None
     assert ps.calibration_trials == profile.calibration_trials

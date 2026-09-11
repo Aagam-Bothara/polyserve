@@ -2,7 +2,7 @@
 
 The headline number is:
 
-    Across N (GPU, model, workload) combinations, PolyServe improves throughput by a median of X%
+    Across N (machine, model, workload) combinations, PolyServe improves throughput by a median of X%
     over the best stock/default configuration that satisfies the requested latency SLO.
 
 "Best default" is chosen per combination as the highest-throughput non-PolyServe row whose TTFT at
@@ -70,7 +70,7 @@ class Summary:
         w, n = self.wins(cs)
         gains = sorted(c.tok_s_gain_pct for c in cs)
         return (
-            f"Across {n} GPU/model/workload combination{'s' if n != 1 else ''}, PolyServe improves throughput "
+            f"Across {n} machine/model/workload combination{'s' if n != 1 else ''}, PolyServe improves throughput "
             f"by a median of {med:+.0f}% (range {gains[0]:+.0f}% to {gains[-1]:+.0f}%) over the best stock/default "
             f"configuration that satisfies the requested latency SLO, winning {w} of {n}."
         )

@@ -213,3 +213,14 @@ def test_worst_source_and_prompt_fitting():
     wl = Workload(n_prompts=3, prefill_tokens=100, decode_tokens=4).fit_prompts(_word_counter())
     assert wl.fitted and all(abs(len(p.split()) - 100) <= 2 for p in wl.prompts)
     assert "~" not in wl.describe()
+
+
+def test_trial_tolerates_a_few_degenerate_requests():
+    """A small model emitting EOS immediately must not invalidate a whole trial."""
+    from polyserve.models import TrialMetrics
+
+    assert TrialMetrics(requests=48, failed=2, output_tokens=6000).ok      # 4%, tolerated
+    assert TrialMetrics(requests=48, failed=4, output_tokens=6000).ok      # exactly 8.3%
+    assert not TrialMetrics(requests=48, failed=10, output_tokens=6000).ok  # 21%, real breakage
+    assert not TrialMetrics(requests=48, failed=48, output_tokens=0).ok
+    assert not TrialMetrics(requests=0, failed=0, output_tokens=0).ok

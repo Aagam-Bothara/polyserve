@@ -6,14 +6,15 @@ Every cell is one `polyserve compare` run: PolyServe's calibrated pick, each ins
 
 | GPU | Model | vLLM | SGLang | llama.cpp | Ollama | PolyServe |
 |---|---|---|---|---|---|---|
+| RTX 3090 24 GB | Qwen2.5-3B-Instruct | ✓ | not installed | ✓ | ✓ | ✓ |
 | A100 80 GB | Llama-3.2-3B-Instruct | | | | | |
 | A100 80 GB | Llama-3.1-8B-Instruct | | | | | |
-| RTX 3090 | Llama-3.2-3B-Instruct | | | | | |
-| RTX 3090 | Qwen2.5-7B-Instruct | | | | | |
-| RTX 3090 | Qwen2.5-3B-Instruct | ✓ (calibration only, pre-`compare`) | | ✓ | | ✓ |
+| RTX 3090 24 GB | Qwen2.5-7B-Instruct | | | | | |
 | A30 | Llama-3.2-3B-Instruct | | | | | |
-| GTX 1080 | Llama-3.2-1B / Qwen2.5-1.5B | n/a (cc 6.1) | n/a | | | |
+| GTX 1080 8 GB | Qwen2.5-1.5B-Instruct | n/a (cc 6.1) | n/a | | | |
 | CPU only | Qwen2.5-1.5B-Instruct | n/a | n/a | | | |
+
+The RTX 3090 row is complete for all six workloads: stock vLLM, stock llama.cpp and real Ollama were each measured against PolyServe's pick on the same card within minutes of each other. SGLang was not installed on that machine, so it has never been benchmarked. Every other row is empty.
 
 Each row is run for every workload in `polyserve workloads` (`default`, `chat`, `long-context`, `generation`, `high-concurrency`, `rag`). A ✓ means the results file exists; `polyserve report` fills in the numbers.
 
