@@ -253,6 +253,8 @@ class Profile(BaseModel):
     backend_version: Optional[str]
     config: Config
     prepared: Optional[PreparedModel] = None
+    # Every candidate backend's prepared model, so trials from losing backends stay analysable.
+    prepared_all: Dict[str, PreparedModel] = Field(default_factory=dict)
     launch_args: List[str]
     launch_env: Dict[str, str] = Field(default_factory=dict)
     calibration_table: List[TrialResult] = Field(default_factory=list)

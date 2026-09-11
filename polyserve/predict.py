@@ -265,18 +265,22 @@ def observations_from_profile(profile: Profile) -> List[Observation]:
     """One observation per (trial, concurrency level) with measured tok/s."""
     out: List[Observation] = []
     pm = profile.prepared
-    if pm is None:
+    if pm is None and not profile.prepared_all:
         return out
     spec = profile.workload_spec or {}
     lp = int(spec.get("prefill_tokens", 256))
     ld = int(spec.get("decode_tokens", 128))
     for t in profile.calibration_table:
-        if not t.ok or t.config.backend != pm.backend and t.config.backend != profile.backend:
-            pass
-        if not t.ok or t.config.quant not in pm.weights_bytes:
+        if not t.ok:
+            continue
+        # Every candidate backend's prepared model is kept, so losing backends are analysable too.
+        model = profile.prepared_all.get(t.config.backend) or (
+            pm if pm is not None and t.config.quant in pm.weights_bytes else None
+        )
+        if model is None or t.config.quant not in model.weights_bytes:
             continue
         try:
-            sit = situation(pm, t.config, lp, ld)
+            sit = situation(model, t.config, lp, ld)
         except Exception:
             continue
         levels = list(t.metrics.by_concurrency.values()) or [t.metrics]

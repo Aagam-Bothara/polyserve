@@ -64,6 +64,7 @@ def parse_vllm(text: str) -> MeasuredMemory:
     if r := re.search(r"weights memory:\s*" + _SIZE, text):
         m.weights_mb = _to_mb(*r.groups())
     elif r := re.search(r"Model loading took\s*" + _SIZE, text):
+        # vLLM 0.11: "Model loading took 5.7916 GiB and 1.16 seconds" (no "memory" word).
         m.weights_mb = _to_mb(*r.groups())
     if r := re.search(r"Total non KV cache memory:\s*" + _SIZE, text):
         m.non_kv_mb = _to_mb(*r.groups())
@@ -175,7 +176,12 @@ def parse_log(backend: str, text: str) -> MeasuredMemory:
 
 def merge(log: MeasuredMemory, device_peak_mb: Optional[float], baseline_mb: Optional[float],
           telemetry_source: str) -> MeasuredMemory:
-    """Combine log components with the NVML/psutil peak observed during the trial."""
+    """Combine log components with the NVML/psutil peak observed during the trial.
+
+    vLLM 0.11 reports weights and the KV pool but not the rest, so workspace is derived as
+    peak - weights - kv when all three are known. That residual is exactly the non-weight,
+    non-KV device memory (CUDA context, graphs, activations) the planner budgets for.
+    """
     out = log.model_copy()
     if device_peak_mb is not None:
         peak = device_peak_mb - (baseline_mb or 0.0)
@@ -183,6 +189,11 @@ def merge(log: MeasuredMemory, device_peak_mb: Optional[float], baseline_mb: Opt
         out.baseline_mb = baseline_mb
         if out.source == "none":
             out.source = "nvml" if telemetry_source in ("llmtrace", "pynvml") else telemetry_source
+    if out.workspace_mb is None and out.device_peak_mb and out.weights_mb is not None and out.kv_mb is not None:
+        out.workspace_mb = max(0.0, out.device_peak_mb - out.weights_mb - out.kv_mb)
+        out.details["workspace_derived"] = 1.0
+    if out.non_kv_mb is None and out.weights_mb is not None and out.workspace_mb is not None:
+        out.non_kv_mb = out.weights_mb + out.workspace_mb
     return out
 
 

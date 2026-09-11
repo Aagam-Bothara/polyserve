@@ -127,12 +127,23 @@ def _baseline_candidates(group: Sequence[Config]) -> List[Config]:
     The planner already vetted every config here, so the largest memory setting (full GPU
     offload, highest gpu_memory_utilization) is the fair one to compare quants at; the
     smaller ones are fallbacks if that launch fails.
+
+    The median context and median batch need not co-occur: the planner prunes the grid
+    asymmetrically, so a long-context workload on a small card can keep (32k, batch 4) and
+    (16k, batch 64) while dropping (32k, batch 64). Fall back to the nearest surviving batch
+    at that context, then to the whole group, rather than returning nothing.
     """
+    if not group:
+        return []
     ctxs = sorted({c.ctx for c in group})
     batches = sorted({c.batch for c in group})
     ctx = ctxs[len(ctxs) // 2]
     batch = batches[len(batches) // 2]
     same = [c for c in group if c.ctx == ctx and c.batch == batch]
+    if not same:
+        at_ctx = [c for c in group if c.ctx == ctx] or list(group)
+        nearest = min({c.batch for c in at_ctx}, key=lambda b: (abs(b - batch), b))
+        same = [c for c in at_ctx if c.batch == nearest]
     return sorted(same, key=lambda c: (_memory_knob(c), c.n_batch or 0), reverse=True)
 
 
@@ -218,8 +229,12 @@ class StagedSearch:
                     groups.pop(key, None)
         stage_results: Dict[Tuple[str, str], TrialResult] = {}
         for key, group in groups.items():
+            candidates = _baseline_candidates(group)[: self.max_memory_trials_per_quant]
+            if not candidates:
+                logger.warning("no baseline config for %s; skipping", key)
+                continue
             # Largest memory setting first; step down only if the launch itself fails.
-            for cfg in _baseline_candidates(group)[: self.max_memory_trials_per_quant]:
+            for cfg in candidates:
                 res = self._run(cfg, "quant")
                 stage_results[key] = res
                 if res.launched:

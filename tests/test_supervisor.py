@@ -66,7 +66,9 @@ def test_process_reports_startup_failure(tmp_path):
 
 
 def test_supervisor_restarts_after_crash(tmp_path):
-    be = FakeBackend(["--die-after", "1.0"])
+    # Crash once, then stay up, so "restarted and recovered" is observable rather than a race
+    # against a server that keeps dying.
+    be = FakeBackend(["--die-after", "1.0", "--die-once", str(tmp_path / "died")])
     sup = Supervisor(be, _cfg(), None, log_path=tmp_path / "s.log", startup_timeout=15, health_interval=0.3,
                      max_restarts=2)
     sup.start()
@@ -77,7 +79,7 @@ def test_supervisor_restarts_after_crash(tmp_path):
         while time.time() < deadline and sup.restarts == 0:
             time.sleep(0.2)
         assert sup.restarts >= 1
-        # After restart the new process should become healthy again (until it dies again).
+        # After the one crash the restarted process stays up, so recovery is deterministic.
         deadline = time.time() + 15
         while time.time() < deadline and not sup.healthy():
             time.sleep(0.1)

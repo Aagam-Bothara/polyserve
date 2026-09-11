@@ -73,7 +73,8 @@ def test_merge_subtracts_baseline_and_labels_source():
     assert m2.source == "llamacpp-log" and m2.total_mb == pytest.approx(2003.5 + 576.0 + 300.25)
 
 
-def _trial(backend, key_batch, predicted_mb, measured_mb, measured_ws=None, error=None, launched=True):
+def _trial(backend, key_batch, predicted_mb, measured_mb, measured_ws=None, error=None, launched=True,
+           measured_weights=None, measured_kv=None):
     cfg = Config(backend=backend, quant="Q4_K_M", ctx=4096, batch=key_batch, n_gpu_layers=37)
     ws = 768 * MiB
     weights = int((predicted_mb * MiB) * 0.6)
@@ -81,7 +82,10 @@ def _trial(backend, key_batch, predicted_mb, measured_mb, measured_ws=None, erro
     pred = MemoryEstimate(config_key=cfg.key(), weights=weights, kv_cache=kv, runtime_workspace=ws,
                           safety_margin=512 * MiB, total=int(predicted_mb * MiB) + 512 * MiB, budget=20 * GiB,
                           feasible=True)
-    meas = MeasuredMemory(device_peak_mb=measured_mb, workspace_mb=measured_ws, source="nvml") if measured_mb else None
+    meas = None
+    if measured_mb:
+        meas = MeasuredMemory(device_peak_mb=measured_mb, workspace_mb=measured_ws, weights_mb=measured_weights,
+                              kv_mb=measured_kv, source="nvml")
     return TrialResult(config=cfg, stage="t", metrics=TrialMetrics(requests=1, output_tokens=1, failed=0 if launched else 1),
                        launched=launched, error=error, memory=MemoryObservation(predicted=pred, measured=meas))
 
@@ -92,7 +96,8 @@ def test_analysis_reports_error_bias_and_recommendations():
         _trial("llamacpp-cuda", 4, 3600, 3700, measured_ws=310),   # under by 2.7%
         _trial("llamacpp-cuda", 8, 4400, 4200, measured_ws=330),   # over by 4.8%
         _trial("llamacpp-cuda", 8, 9000, None, error="CUDA error: out of memory", launched=False),
-        _trial("vllm", 64, 20_000, 19_900, measured_ws=1400),
+        # Reservation backend: scored on weights + workspace, not on the pool it chose to reserve.
+        _trial("vllm", 64, 20_000, 23_000, measured_ws=1400, measured_weights=6_000, measured_kv=15_600),
     ]
     obs = memcal.observations_from_trials(trials, "hw1")
     assert len(obs) == 5 and sum(o.oom for o in obs) == 1
@@ -102,12 +107,22 @@ def test_analysis_reports_error_bias_and_recommendations():
     assert lc.mape_pct == pytest.approx((3.45 + 2.70 + 4.76) / 3, abs=0.1)
     assert lc.worst_under_pct == pytest.approx(-2.70, abs=0.05)
     assert lc.fitted_workspace_mb == 330  # p95 of [280, 310, 330]
+    # With no per-buffer log lines, workspace is recovered as peak - weights - kv for exact backends.
+    residual = _trial("llamacpp-cuda", 4, 3600, 3700)
+    o = memcal.observations_from_trials([residual], "hw1")[0]
+    assert o.measured_workspace_mb is None
+    assert o.measured_workspace_effective == pytest.approx(3700 - o.predicted_weights_mb - o.predicted_kv_mb)
     assert lc.current_workspace_mb == 768
     assert lc.recommended_margin_fraction == pytest.approx(0.027 + 0.02, abs=0.001)
     v = cals["vllm"]
-    assert v.worst_under_pct == 0.0 and v.recommended_margin_fraction == memcal.MIN_MARGIN_FRACTION
+    assert v.target == "non_kv" and lc.target == "total"
+    # predicted non-KV = 60% of 20000 weights + 768 workspace = 12768; measured = 6000 + 1400 = 7400
+    assert v.n_measured == 1 and v.worst_under_pct == 0.0 and v.worst_over_pct > 70
+    assert v.recommended_margin_fraction == memcal.MIN_MARGIN_FRACTION
+    assert v.kv_headroom_median is not None and v.kv_headroom_median > 1  # pool bigger than budgeted
     md = memcal.render_markdown(cals, hardware="RTX 3090")
-    assert "| llamacpp-cuda | 4 | 3 |" in md and "768 → 330 MB" in md and "1 OOM" in md
+    assert "| llamacpp-cuda | peak device | 4 | 3 |" in md and "768 → 330 MB" in md and "1 OOM" in md
+    assert "weights+workspace" in md
     assert "No trials" in memcal.render_markdown({})
 
 

@@ -61,6 +61,7 @@ def main() -> None:
     ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--startup-delay", type=float, default=0.0)
     ap.add_argument("--die-after", type=float, default=0.0, help="exit abruptly after N seconds")
+    ap.add_argument("--die-once", default="", help="marker path; die only on the first start, then stay up")
     ap.add_argument("--fail", action="store_true", help="exit 3 immediately")
     args = ap.parse_args()
     if args.fail:
@@ -68,7 +69,14 @@ def main() -> None:
         sys.exit(3)
     time.sleep(args.startup_delay)
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    if args.die_after > 0:
+    should_die = args.die_after > 0
+    if should_die and args.die_once:
+        # Crash exactly once so a supervisor's restart can be observed settling into a healthy state.
+        if os.path.exists(args.die_once):
+            should_die = False
+        else:
+            open(args.die_once, "w").close()
+    if should_die:
         threading.Timer(args.die_after, lambda: os._exit(9)).start()
     print(f"fake backend listening on {args.port}", flush=True)
     srv.serve_forever()

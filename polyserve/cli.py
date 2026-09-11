@@ -292,8 +292,11 @@ def compare(
         else:
             err.print(f"[red]compare[/] {label} FAILED: {(row.error or '').splitlines()[0][:80]}")
 
+    from polyserve import cache as profile_cache
+
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=wl, constraints=cons,
-                      ollama_tag=ollama_model, include=include or None, progress=_row_progress)
+                      ollama_tag=ollama_model, include=include or None, progress=_row_progress,
+                      log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{wl.name}")
     path = save(result, out)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")

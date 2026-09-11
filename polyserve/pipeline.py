@@ -94,6 +94,7 @@ def _profile_for(
     table=None,
     notes: Optional[List[str]] = None,
     workload: Optional[Workload] = None,
+    prepared_all: Optional[Dict[str, PreparedModel]] = None,
 ) -> Profile:
     launch = backend.launch_spec(cfg, prepared, 0)
     workload = workload or get_workload("default")
@@ -109,6 +110,7 @@ def _profile_for(
         backend_version=backend.version(hw),
         config=cfg,
         prepared=prepared,
+        prepared_all=dict(prepared_all or {}),
         launch_args=launch.args,
         launch_env=launch.env,
         calibration_table=list(table or []),
@@ -135,7 +137,7 @@ def default_profile(hw: HardwareDescriptor, spec: ModelSpec, plan: PlanResult, r
             cfg.quant = next(iter(prepared.weights_bytes))
         backend.materialize(prepared, [cfg.quant])
         return _profile_for(hw, spec, objective, backend, cfg, prepared, notes=["uncalibrated defaults"],
-                            workload=workload)
+                            workload=workload, prepared_all=plan.prepared)
     raise RuntimeError(f"no usable backend for {spec.hf_id}; errors: {plan.errors}")
 
 
@@ -178,7 +180,7 @@ def calibrate(
     backend = reg[winner.config.backend]
     prepared = plan.prepared[winner.config.backend]
     profile = _profile_for(hw, spec, objective, backend, winner.config, prepared, table=search.results,
-                           notes=notes, workload=workload)
+                           notes=notes, workload=workload, prepared_all=plan.prepared)
     profile.calibration_seconds = elapsed
     profile.calibration_trials = len(search.results)
     return profile

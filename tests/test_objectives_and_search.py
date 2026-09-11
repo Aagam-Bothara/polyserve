@@ -7,7 +7,7 @@ import pytest
 
 from polyserve.backends import get_backend
 from polyserve.calibrate.objectives import Constraints, pick, rank
-from polyserve.calibrate.search import StagedSearch, _baseline
+from polyserve.calibrate.search import StagedSearch, _baseline, _baseline_candidates
 from polyserve.memory import plan
 from polyserve.models import Config, TrialMetrics, TrialResult
 
@@ -141,6 +141,26 @@ def test_noise_tolerance_prefers_larger_context():
     assert w is big
     w, _ = pick([small, big], "throughput", Constraints(noise_tolerance=0.0))
     assert w is small
+
+
+def test_baseline_survives_an_asymmetrically_pruned_grid():
+    # A long-context grid on a small card: the median ctx (8192) and median batch (64) never
+    # co-occur, because big-context/big-batch configs were pruned by the memory planner.
+    cfgs = [Config(backend="vllm", quant="bf16", ctx=4096, batch=b, gpu_memory_utilization=g)
+            for b in (16, 64, 256) for g in (0.8, 0.9)]
+    cfgs += [Config(backend="vllm", quant="bf16", ctx=8192, batch=16, gpu_memory_utilization=g) for g in (0.8, 0.9)]
+    assert not [c for c in cfgs if c.ctx == 8192 and c.batch == 64]
+    b = _baseline(cfgs)
+    assert b.ctx == 8192 and b.batch == 16 and b.gpu_memory_utilization == 0.9
+    assert _baseline_candidates([]) == []
+
+
+def test_staged_search_skips_a_group_with_no_baseline(hw_a100, prepared_vllm):
+    runner = FakeRunner()
+    search = StagedSearch(objective="throughput", runner=runner)
+    winner, notes = search.run([Config(backend="vllm", quant="bf16", ctx=4096, batch=16,
+                                       gpu_memory_utilization=0.9)])
+    assert winner is not None and len(runner.calls) >= 1
 
 
 def test_staged_search_runs_stages_and_dedups(hw_a100, prepared_vllm):

@@ -24,6 +24,11 @@ from typing import Dict, Iterable, List, Optional
 
 from polyserve.models import MiB, TrialResult
 
+# Backends that reserve a fixed share of the device up front and size the KV pool to fill it.
+# For these, peak device memory is a policy choice (gpu_memory_utilization x VRAM), not a
+# requirement, so the planner is scored on non-KV memory (weights + workspace) instead.
+RESERVATION_BACKENDS = {"vllm", "sglang", "vllm-cpu"}
+
 WORKSPACE_PERCENTILE = 0.95
 MARGIN_BUFFER = 0.02  # added on top of the worst observed under-prediction
 MIN_MARGIN_FRACTION = 0.02
@@ -37,29 +42,74 @@ def model_path() -> Path:
 # --------------------------------------------------------------------------- observations
 
 
+def target_for(backend: str) -> str:
+    """What the planner is scored against: 'non_kv' for reservation backends, else 'total'."""
+    return "non_kv" if backend in RESERVATION_BACKENDS else "total"
+
+
 @dataclass
 class Observation:
     backend: str
     config_key: str
     hardware_hash: str
-    predicted_mb: float  # weights + kv + workspace (no margin)
-    predicted_weights_mb: float
-    predicted_kv_mb: float
-    predicted_workspace_mb: float
-    measured_mb: Optional[float]  # device peak (or log total)
-    measured_weights_mb: Optional[float]
-    measured_kv_mb: Optional[float]
-    measured_workspace_mb: Optional[float]
-    launched: bool
-    oom: bool
-    source: str
+    target: str = "total"  # "total" (peak device memory) | "non_kv" (weights + workspace)
+    predicted_mb: float = 0.0  # weights + kv + workspace (no margin)
+    predicted_weights_mb: float = 0.0
+    predicted_kv_mb: float = 0.0
+    predicted_workspace_mb: float = 0.0
+    measured_mb: Optional[float] = None  # device peak (or log total)
+    measured_weights_mb: Optional[float] = None
+    measured_kv_mb: Optional[float] = None
+    measured_workspace_mb: Optional[float] = None
+    launched: bool = True
+    oom: bool = False
+    source: str = "none"
+
+    @property
+    def predicted_target_mb(self) -> float:
+        if self.target == "non_kv":
+            return self.predicted_weights_mb + self.predicted_workspace_mb
+        return self.predicted_mb
+
+    @property
+    def measured_target_mb(self) -> Optional[float]:
+        if self.target == "non_kv":
+            if self.measured_weights_mb is not None and self.measured_workspace_mb is not None:
+                return self.measured_weights_mb + self.measured_workspace_mb
+            if self.measured_mb is not None and self.measured_kv_mb is not None:
+                return max(0.0, self.measured_mb - self.measured_kv_mb)
+            return None
+        return self.measured_mb
+
+    @property
+    def measured_workspace_effective(self) -> Optional[float]:
+        """Measured workspace, or the residual for backends that allocate weights and KV exactly.
+
+        llama.cpp allocates exactly the GGUF it is given and exactly ctx x n_parallel of KV, so
+        peak - weights - kv is the compute-buffer workspace even when the build prints no
+        per-buffer lines. Reservation backends size KV elastically, so no residual is inferred.
+        """
+        if self.measured_workspace_mb is not None:
+            return self.measured_workspace_mb
+        if self.target == "total" and self.measured_mb is not None:
+            residual = self.measured_mb - self.predicted_weights_mb - self.predicted_kv_mb
+            return residual if residual > 0 else None
+        return None
+
+    @property
+    def kv_headroom(self) -> Optional[float]:
+        """Measured KV pool / KV the planner budgeted. >1 means the pool was bigger than assumed."""
+        if self.measured_kv_mb and self.predicted_kv_mb > 0:
+            return self.measured_kv_mb / self.predicted_kv_mb
+        return None
 
     @property
     def error_pct(self) -> Optional[float]:
-        """(predicted - measured) / measured; negative = under-prediction (dangerous)."""
-        if self.measured_mb is None or self.measured_mb <= 0:
+        """(predicted - measured) / measured on the target quantity; negative = under-prediction."""
+        m = self.measured_target_mb
+        if m is None or m <= 0:
             return None
-        return (self.predicted_mb - self.measured_mb) / self.measured_mb * 100.0
+        return (self.predicted_target_mb - m) / m * 100.0
 
 
 def _is_oom(error: Optional[str]) -> bool:
@@ -76,11 +126,14 @@ def observations_from_trials(trials: Iterable[TrialResult], hardware_hash: str) 
             continue
         p = t.memory.predicted
         m = t.memory.measured
+        if p.weights <= 0:
+            continue  # reference runtimes we do not plan for (e.g. Ollama picks its own quant)
         out.append(
             Observation(
                 backend=t.config.backend,
                 config_key=t.config.key(),
                 hardware_hash=hardware_hash,
+                target=target_for(t.config.backend),
                 predicted_mb=(p.weights + p.kv_cache + p.runtime_workspace) / MiB,
                 predicted_weights_mb=p.weights / MiB,
                 predicted_kv_mb=p.kv_cache / MiB,
@@ -103,6 +156,7 @@ def observations_from_trials(trials: Iterable[TrialResult], hardware_hash: str) 
 @dataclass
 class BackendCalibration:
     backend: str
+    target: str = "total"
     n: int = 0
     n_measured: int = 0
     mape_pct: Optional[float] = None
@@ -116,6 +170,7 @@ class BackendCalibration:
     ooms: int = 0
     ooms_predicted_feasible: int = 0  # OOMs the planner did not foresee = planner failures
     recommended_margin_fraction: Optional[float] = None
+    kv_headroom_median: Optional[float] = None
     observations: List[Observation] = field(default_factory=list)
 
 
@@ -138,7 +193,7 @@ def analyse(observations: List[Observation]) -> Dict[str, BackendCalibration]:
         by.setdefault(o.backend, []).append(o)
     out: Dict[str, BackendCalibration] = {}
     for backend, obs in by.items():
-        cal = BackendCalibration(backend=backend, n=len(obs), observations=obs)
+        cal = BackendCalibration(backend=backend, target=target_for(backend), n=len(obs), observations=obs)
         errs = [o.error_pct for o in obs if o.error_pct is not None]
         cal.n_measured = len(errs)
         if errs:
@@ -149,9 +204,12 @@ def analyse(observations: List[Observation]) -> Dict[str, BackendCalibration]:
         cal.weights_mape_pct = _mape([(o.predicted_weights_mb, o.measured_weights_mb) for o in obs
                                       if o.measured_weights_mb])
         cal.kv_mape_pct = _mape([(o.predicted_kv_mb, o.measured_kv_mb) for o in obs if o.measured_kv_mb])
-        ws = [o.measured_workspace_mb for o in obs if o.measured_workspace_mb is not None]
+        ws = [o.measured_workspace_effective for o in obs if o.measured_workspace_effective is not None]
         if ws:
             cal.fitted_workspace_mb = _pct(ws, WORKSPACE_PERCENTILE)
+        heads = [o.kv_headroom for o in obs if o.kv_headroom is not None]
+        if heads:
+            cal.kv_headroom_median = statistics.median(heads)
         cal.current_workspace_mb = obs[0].predicted_workspace_mb
         cal.ooms = sum(1 for o in obs if o.oom)
         cal.ooms_predicted_feasible = cal.ooms  # every observed trial was planner-feasible by construction
@@ -224,16 +282,18 @@ def render_markdown(cals: Dict[str, BackendCalibration], hardware: Optional[str]
     if not cals:
         return "\n".join(lines + ["No trials with memory observations yet.", ""])
     lines += [
-        "| backend | trials | measured | MAPE | bias | worst under | worst over | weights MAPE | KV MAPE | "
-        "workspace now → fitted (p95) | OOMs | margin now → recommended |",
-        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        "| backend | scored on | trials | measured | MAPE | bias | worst under | worst over | weights MAPE | "
+        "workspace now → fitted (p95) | KV pool vs budget | OOMs | margin now → recommended |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for b, c in sorted(cals.items()):
         ws = f"{_f(c.current_workspace_mb, 0)} → {_f(c.fitted_workspace_mb, 0)} MB"
+        head = f"{_f(c.kv_headroom_median, 1)}x" if c.kv_headroom_median else "-"
+        target = "weights+workspace" if c.target == "non_kv" else "peak device"
         lines.append(
-            f"| {b} | {c.n} | {c.n_measured} | {_f(c.mape_pct)}% | {_f(c.bias_pct, 1, True)}% | "
+            f"| {b} | {target} | {c.n} | {c.n_measured} | {_f(c.mape_pct)}% | {_f(c.bias_pct, 1, True)}% | "
             f"{_f(c.worst_under_pct, 1, True)}% | {_f(c.worst_over_pct, 1, True)}% | {_f(c.weights_mape_pct)}% | "
-            f"{_f(c.kv_mape_pct)}% | {ws} | {c.ooms} | 5.0% → {_f((c.recommended_margin_fraction or 0) * 100)}% |"
+            f"{ws} | {head} | {c.ooms} | 5.0% → {_f((c.recommended_margin_fraction or 0) * 100)}% |"
         )
     total = sum(c.n for c in cals.values())
     ooms = sum(c.ooms for c in cals.values())
@@ -243,15 +303,18 @@ def render_markdown(cals: Dict[str, BackendCalibration], hardware: Optional[str]
         mape = statistics.fmean(abs(o.error_pct) for o in measured)
         lines += [
             "",
-            f"Across {len(measured)} measured trials ({total} planned) the planner predicts peak device memory "
+            f"Across {len(measured)} measured trials ({total} planned) the planner predicts its target quantity "
             f"within {mape:.1f}% on average; worst under-prediction {worst:+.1f}%; {ooms} OOM"
             f"{'s' if ooms != 1 else ''} among planner-feasible configs.",
         ]
     lines += [
         "",
-        "MAPE = mean |predicted − measured| / measured over weights + KV + workspace (margin excluded). "
-        "Negative bias means the planner under-predicts; the recommended margin is the worst under-prediction "
-        "plus 2%, clamped to [2%, 15%], with the 512 MB floor unchanged.",
+        "Reservation backends (vLLM, SGLang) size their KV pool to fill `gpu_memory_utilization x VRAM`, so their "
+        "peak is a policy choice, not a requirement: they are scored on weights + workspace, and the KV column "
+        "shows how much larger the pool they allocated was than the planner budgeted. llama.cpp allocates exactly "
+        "what it is asked for, so it is scored on peak device memory. Negative bias means the planner "
+        "under-predicts; the recommended margin is the worst under-prediction plus 2%, clamped to [2%, 15%], with "
+        "the 512 MB floor unchanged.",
         "",
     ]
     return "\n".join(lines)
