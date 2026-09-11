@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="480" font-family="Inter, Helvetica, Arial, sans-serif" font-size="11">
+<style>text{fill:#52514e}.axis{stroke:#c3c2b7;stroke-width:1}.grid{stroke:#e1e0d9;stroke-width:1}.slo{stroke:#898781;stroke-dasharray:4 3}.t{fill:#898781}</style>
+<rect width="900" height="480" fill="#fcfcfb"/>
+<text x="48" y="16" font-weight="600" font-size="12" fill="#0b0b0b">NVIDIA GeForce RTX 3090 · Qwen2.5-3B-Instruct · chat</text>
+<line class="grid" x1="48" x2="286" y1="184.0" y2="184.0"/>
+<text class="t" x="42" y="188.0" text-anchor="end" font-size="10">0</text>
+<line class="grid" x1="48" x2="286" y1="146.5" y2="146.5"/>
+<text class="t" x="42" y="150.5" text-anchor="end" font-size="10">314</text>
+<line class="grid" x1="48" x2="286" y1="109.0" y2="109.0"/>
+<text class="t" x="42" y="113.0" text-anchor="end" font-size="10">627</text>
+<line class="grid" x1="48" x2="286" y1="71.5" y2="71.5"/>
+<text class="t" x="42" y="75.5" text-anchor="end" font-size="10">941</text>
+<line class="grid" x1="48" x2="286" y1="34.0" y2="34.0"/>
+<text class="t" x="42" y="38.0" text-anchor="end" font-size="10">1255</text>
+<line class="grid" x1="146.0" x2="146.0" y1="34" y2="184"/>
+<text class="t" x="146.0" y="198" text-anchor="middle" font-size="10">100</text>
+<line class="axis" x1="48" x2="286" y1="184" y2="184"/>
+<line class="axis" x1="48" x2="48" y1="34" y2="184"/>
+<text x="167.0" y="214" text-anchor="middle" font-size="10">TTFT p50 (ms, log)</text>
+<text transform="translate(12,109.0) rotate(-90)" text-anchor="middle" font-size="10">tok/s</text>
+<line class="slo" x1="257.8" x2="257.8" y1="34" y2="184"/>
+<text class="t" x="260.8" y="44" font-size="9">SLO 500 ms</text>
+<circle cx="76.2" cy="53.6" r="6" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"><title>PolyServe: 1091 tok/s, TTFT 37 ms</title></circle>
+<text x="85.2" y="57.6" font-size="10" font-weight="600" fill="#0b0b0b">PolyServe</text>
+<circle cx="81.9" cy="105.9" r="5" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"><title>vllm-default: 653 tok/s, TTFT 40 ms</title></circle>
+<text x="90.9" y="109.9" font-size="9">vllm</text>
+<circle cx="119.2" cy="159.0" r="5" fill="#fcfcfb" stroke="#eb6834" stroke-width="2"><title>llamacpp-cuda-default: 209 tok/s, TTFT 68 ms</title></circle>
+<text x="128.2" y="163.0" font-size="9">llamacpp-cuda</text>
+<circle cx="144.7" cy="168.8" r="5" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"><title>ollama-default: 127 tok/s, TTFT 98 ms</title></circle>
+<text x="153.7" y="172.8" font-size="9">ollama</text>
+<text x="348" y="16" font-weight="600" font-size="12" fill="#0b0b0b">NVIDIA GeForce RTX 3090 · Qwen2.5-3B-Instruct · default</text>
+<line class="grid" x1="348" x2="586" y1="184.0" y2="184.0"/>
+<text class="t" x="342" y="188.0" text-anchor="end" font-size="10">0</text>
+<line class="grid" x1="348" x2="586" y1="146.5" y2="146.5"/>
+<text class="t" x="342" y="150.5" text-anchor="end" font-size="10">315</text>
+<line class="grid" x1="348" x2="586" y1="109.0" y2="109.0"/>
+<text class="t" x="342" y="113.0" text-anchor="end" font-size="10">631</text>
+<line class="grid" x1="348" x2="586" y1="71.5" y2="71.5"/>
+<text class="t" x="342" y="75.5" text-anchor="end" font-size="10">946</text>
+<line class="grid" x1="348" x2="586" y1="34.0" y2="34.0"/>
+<text class="t" x="342" y="38.0" text-anchor="end" font-size="10">1262</text>
+<line class="grid" x1="451.3" x2="451.3" y1="34" y2="184"/>
+<text class="t" x="451.3" y="198" text-anchor="middle" font-size="10">100</text>
+<line class="axis" x1="348" x2="586" y1="184" y2="184"/>
+<line class="axis" x1="348" x2="348" y1="34" y2="184"/>
+<text x="467.0" y="214" text-anchor="middle" font-size="10">TTFT p50 (ms, log)</text>
+<text transform="translate(312,109.0) rotate(-90)" text-anchor="middle" font-size="10">tok/s</text>
+<line class="slo" x1="558.9" x2="558.9" y1="34" y2="184"/>
+<text class="t" x="561.9" y="44" font-size="9">SLO 500 ms</text>
+<circle cx="375.1" cy="53.6" r="6" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"><title>PolyServe: 1097 tok/s, TTFT 32 ms</title></circle>
+<text x="384.1" y="57.6" font-size="10" font-weight="600" fill="#0b0b0b">PolyServe</text>
+<circle cx="390.3" cy="102.3" r="5" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"><title>vllm-default: 687 tok/s, TTFT 40 ms</title></circle>
+<text x="399.3" y="106.3" font-size="9">vllm</text>
+<circle cx="406.7" cy="158.7" r="5" fill="#fcfcfb" stroke="#eb6834" stroke-width="2"><title>llamacpp-cuda-default: 213 tok/s, TTFT 51 ms</title></circle>
+<text x="415.7" y="162.7" font-size="9">llamacpp-cuda</text>
+<circle cx="402.8" cy="168.4" r="5" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"><title>ollama-default: 131 tok/s, TTFT 48 ms</title></circle>
+<text x="411.8" y="172.4" font-size="9">ollama</text>
+<text x="648" y="16" font-weight="600" font-size="12" fill="#0b0b0b">NVIDIA GeForce RTX 3090 · Qwen2.5-3B-Instruct · generation</text>
+<line class="grid" x1="648" x2="886" y1="184.0" y2="184.0"/>
+<text class="t" x="642" y="188.0" text-anchor="end" font-size="10">0</text>
+<line class="grid" x1="648" x2="886" y1="146.5" y2="146.5"/>
+<text class="t" x="642" y="150.5" text-anchor="end" font-size="10">320</text>
+<line class="grid" x1="648" x2="886" y1="109.0" y2="109.0"/>
+<text class="t" x="642" y="113.0" text-anchor="end" font-size="10">639</text>
+<line class="grid" x1="648" x2="886" y1="71.5" y2="71.5"/>
+<text class="t" x="642" y="75.5" text-anchor="end" font-size="10">959</text>
+<line class="grid" x1="648" x2="886" y1="34.0" y2="34.0"/>
+<text class="t" x="642" y="38.0" text-anchor="end" font-size="10">1278</text>
+<line class="grid" x1="749.6" x2="749.6" y1="34" y2="184"/>
+<text class="t" x="749.6" y="198" text-anchor="middle" font-size="10">100</text>
+<line class="axis" x1="648" x2="886" y1="184" y2="184"/>
+<line class="axis" x1="648" x2="648" y1="34" y2="184"/>
+<text x="767.0" y="214" text-anchor="middle" font-size="10">TTFT p50 (ms, log)</text>
+<text transform="translate(612,109.0) rotate(-90)" text-anchor="middle" font-size="10">tok/s</text>
+<line class="slo" x1="858.5" x2="858.5" y1="34" y2="184"/>
+<text class="t" x="861.5" y="44" font-size="9">SLO 500 ms</text>
+<circle cx="675.5" cy="53.6" r="6" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"><title>PolyServe: 1111 tok/s, TTFT 33 ms</title></circle>
+<text x="684.5" y="57.6" font-size="10" font-weight="600" fill="#0b0b0b">PolyServe</text>
+<circle cx="688.1" cy="103.8" r="5" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"><title>vllm-default: 683 tok/s, TTFT 40 ms</title></circle>
+<text x="697.1" y="107.8" font-size="9">vllm</text>
+<circle cx="700.7" cy="156.4" r="5" fill="#fcfcfb" stroke="#eb6834" stroke-width="2"><title>llamacpp-cuda-default: 235 tok/s, TTFT 49 ms</title></circle>
+<text x="709.7" y="160.4" font-size="9">llamacpp-cuda</text>
+<circle cx="746.8" cy="168.7" r="5" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"><title>ollama-default: 131 tok/s, TTFT 96 ms</title></circle>
+<text x="755.8" y="172.7" font-size="9">ollama</text>
+<text x="48" y="236" font-weight="600" font-size="12" fill="#0b0b0b">NVIDIA GeForce RTX 3090 · Qwen2.5-3B-Instruct · high-concurrency</text>
+<line class="grid" x1="48" x2="286" y1="404.0" y2="404.0"/>
+<text class="t" x="42" y="408.0" text-anchor="end" font-size="10">0</text>
+<line class="grid" x1="48" x2="286" y1="366.5" y2="366.5"/>
+<text class="t" x="42" y="370.5" text-anchor="end" font-size="10">1043</text>
+<line class="grid" x1="48" x2="286" y1="329.0" y2="329.0"/>
+<text class="t" x="42" y="333.0" text-anchor="end" font-size="10">2086</text>
+<line class="grid" x1="48" x2="286" y1="291.5" y2="291.5"/>
+<text class="t" x="42" y="295.5" text-anchor="end" font-size="10">3129</text>
+<line class="grid" x1="48" x2="286" y1="254.0" y2="254.0"/>
+<text class="t" x="42" y="258.0" text-anchor="end" font-size="10">4172</text>
+<line class="grid" x1="147.3" x2="147.3" y1="254" y2="404"/>
+<text class="t" x="147.3" y="418" text-anchor="middle" font-size="10">1000</text>
+<line class="grid" x1="248.3" x2="248.3" y1="254" y2="404"/>
+<text class="t" x="248.3" y="418" text-anchor="middle" font-size="10">10000</text>
+<line class="axis" x1="48" x2="286" y1="404" y2="404"/>
+<line class="axis" x1="48" x2="48" y1="254" y2="404"/>
+<text x="167.0" y="434" text-anchor="middle" font-size="10">TTFT p50 (ms, log)</text>
+<text transform="translate(12,329.0) rotate(-90)" text-anchor="middle" font-size="10">tok/s</text>
+<line class="slo" x1="147.3" x2="147.3" y1="254" y2="404"/>
+<text class="t" x="150.3" y="264" font-size="9">SLO 1000 ms</text>
+<circle cx="65.8" cy="273.6" r="6" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"><title>PolyServe: 3628 tok/s, TTFT 156 ms</title></circle>
+<text x="74.8" y="277.6" font-size="10" font-weight="600" fill="#0b0b0b">PolyServe</text>
+<circle cx="91.7" cy="281.6" r="5" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"><title>vllm-default: 3404 tok/s, TTFT 282 ms</title></circle>
+<text x="100.7" y="285.6" font-size="9">vllm</text>
+<circle cx="245.7" cy="396.4" r="5" fill="#fcfcfb" stroke="#eb6834" stroke-width="2"><title>llamacpp-cuda-default: 211 tok/s, TTFT 9434 ms</title></circle>
+<text x="254.7" y="400.4" font-size="9">llamacpp-cuda</text>
+<circle cx="268.2" cy="399.5" r="5" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"><title>ollama-default: 126 tok/s, TTFT 15761 ms</title></circle>
+<text x="277.2" y="403.5" font-size="9">ollama</text>
+<text x="348" y="236" font-weight="600" font-size="12" fill="#0b0b0b">NVIDIA GeForce RTX 3090 · Qwen2.5-3B-Instruct · long-context</text>
+<line class="grid" x1="348" x2="586" y1="404.0" y2="404.0"/>
+<text class="t" x="342" y="408.0" text-anchor="end" font-size="10">0</text>
+<line class="grid" x1="348" x2="586" y1="366.5" y2="366.5"/>
+<text class="t" x="342" y="370.5" text-anchor="end" font-size="10">125</text>
+<line class="grid" x1="348" x2="586" y1="329.0" y2="329.0"/>
+<text class="t" x="342" y="333.0" text-anchor="end" font-size="10">251</text>
+<line class="grid" x1="348" x2="586" y1="291.5" y2="291.5"/>
+<text class="t" x="342" y="295.5" text-anchor="end" font-size="10">376</text>
+<line class="grid" x1="348" x2="586" y1="254.0" y2="254.0"/>
+<text class="t" x="342" y="258.0" text-anchor="end" font-size="10">502</text>
+<line class="grid" x1="388.1" x2="388.1" y1="254" y2="404"/>
+<text class="t" x="388.1" y="418" text-anchor="middle" font-size="10">100</text>
+<line class="grid" x1="522.1" x2="522.1" y1="254" y2="404"/>
+<text class="t" x="522.1" y="418" text-anchor="middle" font-size="10">1000</text>
+<line class="axis" x1="348" x2="586" y1="404" y2="404"/>
+<line class="axis" x1="348" x2="348" y1="254" y2="404"/>
+<text x="467.0" y="434" text-anchor="middle" font-size="10">TTFT p50 (ms, log)</text>
+<text transform="translate(312,329.0) rotate(-90)" text-anchor="middle" font-size="10">tok/s</text>
+<line class="slo" x1="562.4" x2="562.4" y1="254" y2="404"/>
+<text class="t" x="565.4" y="264" font-size="9">SLO 2000 ms</text>
+<circle cx="371.6" cy="273.6" r="6" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"><title>PolyServe: 436 tok/s, TTFT 75 ms</title></circle>
+<text x="380.6" y="277.6" font-size="10" font-weight="600" fill="#0b0b0b">PolyServe</text>
+<circle cx="372.7" cy="312.7" r="5" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"><title>vllm-default: 305 tok/s, TTFT 77 ms</title></circle>
+<text x="381.7" y="316.7" font-size="9">vllm</text>
+<circle cx="539.1" cy="384.0" r="5" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"><title>ollama-default: 67 tok/s, TTFT 1339 ms</title></circle>
+<text x="548.1" y="388.0" font-size="9">ollama</text>
+<text x="648" y="236" font-weight="600" font-size="12" fill="#0b0b0b">NVIDIA GeForce RTX 3090 · Qwen2.5-3B-Instruct · rag</text>
+<line class="grid" x1="648" x2="886" y1="404.0" y2="404.0"/>
+<text class="t" x="642" y="408.0" text-anchor="end" font-size="10">0</text>
+<line class="grid" x1="648" x2="886" y1="366.5" y2="366.5"/>
+<text class="t" x="642" y="370.5" text-anchor="end" font-size="10">203</text>
+<line class="grid" x1="648" x2="886" y1="329.0" y2="329.0"/>
+<text class="t" x="642" y="333.0" text-anchor="end" font-size="10">405</text>
+<line class="grid" x1="648" x2="886" y1="291.5" y2="291.5"/>
+<text class="t" x="642" y="295.5" text-anchor="end" font-size="10">608</text>
+<line class="grid" x1="648" x2="886" y1="254.0" y2="254.0"/>
+<text class="t" x="642" y="258.0" text-anchor="end" font-size="10">810</text>
+<line class="grid" x1="673.0" x2="673.0" y1="254" y2="404"/>
+<text class="t" x="673.0" y="418" text-anchor="middle" font-size="10">100</text>
+<line class="grid" x1="830.5" x2="830.5" y1="254" y2="404"/>
+<text class="t" x="830.5" y="418" text-anchor="middle" font-size="10">1000</text>
+<line class="axis" x1="648" x2="886" y1="404" y2="404"/>
+<line class="axis" x1="648" x2="648" y1="254" y2="404"/>
+<text x="767.0" y="434" text-anchor="middle" font-size="10">TTFT p50 (ms, log)</text>
+<text transform="translate(612,329.0) rotate(-90)" text-anchor="middle" font-size="10">tok/s</text>
+<line class="slo" x1="858.3" x2="858.3" y1="254" y2="404"/>
+<text class="t" x="861.3" y="264" font-size="9">SLO 1500 ms</text>
+<circle cx="675.7" cy="273.6" r="6" fill="#2a78d6" stroke="#fcfcfb" stroke-width="2"><title>PolyServe: 705 tok/s, TTFT 104 ms</title></circle>
+<text x="684.7" y="277.6" font-size="10" font-weight="600" fill="#0b0b0b">PolyServe</text>
+<circle cx="689.3" cy="310.8" r="5" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"><title>vllm-default: 504 tok/s, TTFT 127 ms</title></circle>
+<text x="698.3" y="314.8" font-size="9">vllm</text>
+<circle cx="829.0" cy="397.3" r="5" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"><title>ollama-default: 36 tok/s, TTFT 978 ms</title></circle>
+<text x="838.0" y="401.3" font-size="9">ollama</text>
+<circle cx="17" cy="466" r="5" fill="#e34948"/>
+<text x="26" y="470" font-size="10">PolyServe</text>
+<circle cx="112" cy="466" r="4" fill="#fcfcfb" stroke="#2a78d6" stroke-width="2"/>
+<text x="121" y="470" font-size="10">vLLM</text>
+<circle cx="172" cy="466" r="4" fill="#fcfcfb" stroke="#1baf7a" stroke-width="2"/>
+<text x="181" y="470" font-size="10">SGLang</text>
+<circle cx="246" cy="466" r="4" fill="#fcfcfb" stroke="#eb6834" stroke-width="2"/>
+<text x="255" y="470" font-size="10">llama.cpp</text>
+<circle cx="341" cy="466" r="4" fill="#fcfcfb" stroke="#4a3aa7" stroke-width="2"/>
+<text x="350" y="470" font-size="10">Ollama</text>
+</svg>

@@ -1,6 +1,6 @@
 # PolyServe
 
-**PolyServe is a hardware-adaptive LLM serving runtime that automatically selects and tunes the best available inference backend for your machine.** One command, one OpenAI-compatible API, no backend or quantization configuration required.
+**PolyServe helps you run LLMs on your own hardware without tuning an inference backend by hand.** Give it a model, and it checks your machine, benchmarks the available options, and serves the chosen configuration through an OpenAI-compatible API.
 
 ```bash
 pip install polyserve
@@ -11,11 +11,11 @@ curl localhost:8000/v1/chat/completions -d '{"model":"meta-llama/Llama-3.2-3B-In
 First launch: discover hardware → prepare model → calibrate once → serve.
 Later launches: load the cached profile → serve.
 
-PolyServe is not a new inference engine. It sits above vLLM, SGLang and llama.cpp and answers the question every deployment starts with: *which backend, which quant, which memory / batch settings, on this box, for this objective?* It answers it by measuring, not by guessing.
+PolyServe works with vLLM, SGLang and llama.cpp. It handles the setup questions that usually take trial and error: which backend to use, which quantization fits, and how to set memory and batch sizes for your workload. It makes those choices by running benchmarks on your machine.
 
 ---
 
-## Supported matrix (v1)
+## Supported hardware (v1)
 
 | Hardware | Backends tried |
 |---|---|
@@ -23,9 +23,9 @@ PolyServe is not a new inference engine. It sits above vLLM, SGLang and llama.cp
 | NVIDIA, compute capability < 7.5 (Pascal, Volta) | llama.cpp (CUDA) |
 | x86 CPU | llama.cpp; vLLM-CPU if AVX-512 is present |
 
-Linux, Python 3.10–3.13. A backend is in v1 only if it gets a row in the benchmark table.
+PolyServe runs on Linux with Python 3.10–3.13. The table above lists the backend candidates for each type of hardware; the benchmarks below show what has been measured so far.
 
-Each backend is a subprocess PolyServe launches with tuned arguments; you install the ones you want:
+Install the backends you want to try. PolyServe starts each one as a separate process and supplies the settings it has tuned:
 
 ```bash
 pip install polyserve[nvml]          # + NVML telemetry (power, utilisation) for calibration
@@ -42,24 +42,40 @@ export LLAMA_SERVER=/path/to/llama-server   # build llama.cpp with -DGGML_CUDA=O
 flowchart LR
     P[probe<br/>GPU / CPU / installed backends] --> S[select<br/>candidate backends]
     S --> M[prepare model<br/>HF weights or GGUF]
-    M --> PL[memory planner<br/>~144 configs → 9–15 feasible]
+    M --> PL[memory planner<br/>prunes the grid to what fits]
     PL --> C[calibrate<br/>staged search, llmtrace-measured]
+    PR[performance predictor<br/>roofline, fitted per machine] -.prunes.-> C
     C --> CA[(profile cache<br/>~/.polyserve/profiles)]
     CA --> SV[serve<br/>supervised backend + OpenAI proxy :8000]
 ```
 
-1. **Probe** — `HardwareDescriptor`: GPU vendor/name/compute capability/VRAM, CPU cores + AVX2/AVX-512, RAM, and which of vLLM / SGLang / llama.cpp / vLLM-CPU are actually runnable here. (`polyserve probe`)
-2. **Select** — the rules in the table above. Multiple candidates are allowed; calibration picks the winner.
-3. **Prepare** — vLLM/SGLang use HF weights as-is. llama.cpp resolves a pre-quantised GGUF from the Hub (Q4_K_M, Q5_K_M, Q6_K, Q8_0), or converts + quantises FP16 itself, and only for the quants the planner keeps.
-4. **Memory planner** — before any process is launched:
-   `estimated = weights + kv_cache(ctx, batch, dtype) + runtime_workspace + safety_margin`, keep a config only if `estimated ≤ 0.95 × available`. This prunes the grid from ~144 points to a dozen. (`polyserve plan <model>`) The planner is **calibrated against itself**: every trial records the prediction next to the measured peak (NVML) and the backend's own weight / KV / workspace figures from its log; `polyserve memory-report` prints the prediction error per backend and `--apply` replaces the hand-set workspace constant and 5% margin with fitted values for this machine.
-5. **Calibrate** — a staged search, not a grid: (1) one short run per quant, keep the top two; (2) largest safe memory config; (3) batch / concurrency sweep. A **performance predictor** (roofline model: weight + KV bandwidth vs compute per decode step, prefill compute, queueing past the slot count; three efficiency parameters per backend fitted from this machine's own trials by `polyserve fit`) skips quants predicted to land far below the best and orders the batch sweep, so the winner is measured first. `polyserve predict` shows its table without launching anything, and `fit` reports leave-one-out error and rank correlation so the pruning is auditable. Each trial replays a fixed synthetic workload (16 prompts × 256-token prefill × 128-token decode at concurrency 1/4/8, ~10 s) and is measured with [llmtrace](https://github.com/Aagam-Bothara/llmtrace): tok/s, TTFT, TPOT, peak memory, GPU utilisation, power.
-6. **Cache** — `~/.polyserve/profiles/<hardware_hash>/<model>/<objective>[-<workload>].json` holds the winner, the full launch args, the whole calibration table, and versions. Invalidated when the hardware or backend version changes; `polyserve recalibrate` forces a rerun.
-7. **Serve** — the winner runs as a supervised subprocess (health check + auto-restart). A thin proxy on `:8000` exposes `/v1/chat/completions`, `/v1/completions`, `/v1/models` (streaming passthrough) and `/polyserve/profile`, which returns the active configuration and calibration table.
+1. **Check your hardware.** PolyServe detects your GPU, its compute capability and VRAM, CPU cores and AVX2/AVX-512 support, RAM, and which backends can run. Use `polyserve probe` to inspect the resulting `HardwareDescriptor`.
+
+2. **Choose candidate backends.** The hardware rules above determine which backends to try. If several are available, calibration decides which one to use.
+
+3. **Prepare the model.** vLLM and SGLang use Hugging Face weights directly. For llama.cpp, PolyServe finds a pre-quantised GGUF on the Hub (Q4_K_M, Q5_K_M, Q6_K or Q8_0), or converts and quantises FP16 weights locally. It only prepares the quantizations that pass memory planning.
+
+4. **Check what fits in memory.** Before launching a backend, the planner estimates its memory needs:
+
+   `estimated = weights + kv_cache(ctx, batch, dtype) + runtime_workspace + safety_margin`
+
+   It keeps a configuration only if `estimated ≤ 0.95 × available`. On a 24 GB card, this reduced 54 vLLM candidates to 48 for a 3B model at 4k context, and to 18 at 32k. None of the admitted configurations ran out of memory in that run. Use `polyserve plan <model>` to see what fits before launching anything.
+
+   Each trial records the estimate alongside measured peak memory from NVML and the backend's own weight, KV cache and workspace figures. `polyserve memory-report` shows the errors by backend. Add `--apply` to replace the initial workspace constant and 5% margin with values fitted to your machine.
+
+5. **Benchmark the candidates.** Calibration starts with a short run per quantization and keeps the top two. It then selects the largest safe memory configuration and tries different batch sizes and concurrency levels.
+
+   A performance predictor helps narrow the search. Its roofline model accounts for weight and KV bandwidth, decode and prefill compute, and queueing beyond the available slots. `polyserve fit` fits three efficiency parameters per backend using your machine's trials. The predictor skips quantizations expected to perform far below the best and tests promising batch settings first. `polyserve predict` shows the predictions without launching a backend; `fit` reports leave-one-out error and rank correlation so you can check their accuracy.
+
+   Each trial replays a fixed synthetic workload. The default uses 16 prompts, a 256-token prefill and a 128-token decode at concurrency 1/4/8, taking roughly 10 seconds. [llmtrace](https://github.com/Aagam-Bothara/llmtrace) measures tokens per second, time to first token (TTFT), time per output token (TPOT), peak memory, GPU utilisation and power.
+
+6. **Save the results.** The chosen configuration, full launch arguments, calibration table and versions are saved in `~/.polyserve/profiles/<hardware_hash>/<model>/<objective>[-<workload>].json`. A hardware or backend version change invalidates the profile. You can also force a fresh run with `polyserve recalibrate`.
+
+7. **Start serving.** PolyServe runs the chosen backend as a supervised process, with health checks and automatic restarts. A proxy on `:8000` exposes `/v1/chat/completions`, `/v1/completions` and `/v1/models`, with streaming passthrough. Visit `/polyserve/profile` to see the active configuration and calibration table.
 
 ### Workloads
 
-Real traffic is not one shape. `--workload` picks the synthetic workload every trial replays, and each preset carries its own TTFT ceiling for the `balanced` objective. Profiles are cached per workload, so `serve --workload rag` and `serve --workload chat` each get their own calibration.
+An interactive chat and a long document query need different settings. Use `--workload` to choose the synthetic traffic used during calibration. Each preset has a time-to-first-token (TTFT) limit for the `balanced` objective. PolyServe caches profiles separately for each workload, so `serve --workload rag` and `serve --workload chat` each get their own calibration.
 
 | `--workload` | prefill | decode | concurrency | TTFT ceiling | shaped like |
 |---|---|---|---|---|---|
@@ -80,16 +96,16 @@ polyserve serve meta-llama/Llama-3.2-3B-Instruct --workload long-context
 
 ### Objectives
 
-All four are constrained argmax. There is no weighted score formula in v1.
+Choose what you want to optimise. PolyServe ranks configurations using the rules below, rather than combining the measurements into a weighted score.
 
 | `--objective` | Rule |
 |---|---|
-| `throughput` | max tok/s |
-| `latency` | min TTFT s.t. tok/s ≥ floor |
-| `balanced` (default) | max tok/s s.t. TTFT ≤ ceiling (the workload's; `--ttft-ceiling` overrides) |
-| `efficiency` | min joules/token s.t. tok/s ≥ floor |
+| `throughput` | Highest tokens per second |
+| `latency` | Lowest TTFT while meeting the minimum tokens per second |
+| `balanced` (default) | Highest tokens per second within the workload's TTFT limit; override it with `--ttft-ceiling` |
+| `efficiency` | Lowest joules per token while meeting the minimum tokens per second |
 
-The floor defaults to 50% of the best observed tok/s (`--tok-s-floor` for an absolute value). If nothing satisfies a constraint, the least-violating config wins and the profile says so.
+The minimum throughput defaults to 50% of the best observed tokens per second. Set `--tok-s-floor` to use an absolute value instead. If no configuration meets the constraint, PolyServe chooses the one that comes closest and records that in the profile.
 
 ---
 
@@ -110,35 +126,64 @@ polyserve predict <model>       # predicted tok/s / TTFT for every feasible conf
 polyserve fit [--apply]         # fit the predictor from cached calibrations; leave-one-out accuracy
 ```
 
-`--skip-calibration` serves the first candidate backend with sane defaults immediately; nothing is cached.
+To start serving without waiting for benchmarks, use `--skip-calibration`. This launches the first candidate backend with default settings and does not cache a profile.
 
 ---
 
 ## Benchmarks
 
-Workload: 16 prompts × ~256-token prefill × 128-token decode, `--objective balanced` (TTFT ≤ 500 ms), measured with llmtrace (NVML at 100 ms). tok/s and TTFT are from the concurrency level the objective selected; W is mean device power during the trial; J/token is integrated device energy over output tokens.
+All rows measured on one RTX 3090 (24 GB, cc 8.6) with vLLM 0.11.0, llama.cpp CUDA and Ollama 0.34 installed, driven by `polyserve compare`: PolyServe's calibrated pick and every stock default run against the same workload, minutes apart, on the same card. Telemetry via llmtrace (NVML at 100 ms). Raw results are in [benchmarks/results/](benchmarks/results/); `polyserve report` regenerates [benchmarks/RESULTS.md](benchmarks/RESULTS.md) and the throughput-vs-TTFT plot.
 
-### RTX 3090 (24 GB, cc 8.6), Qwen2.5-3B-Instruct, vLLM 0.11.0 + llama.cpp b-current
+### Qwen2.5-3B-Instruct, `--objective balanced`
 
-| Runtime / config | tok/s | TTFT p50 (ms) | peak mem (GB) | W | J/token |
-|---|---|---|---|---|---|
-| **PolyServe auto** → vLLM fp8, ctx 4096, max_num_seqs 64 | **1065** | 31 | 19.9 | 297 | **0.94** |
-| vLLM bf16, same ctx / batch (stock precision) | 694 | 37 | 20.0 | 296 | 1.37 |
-| PolyServe auto, llama.cpp only (`--backend llamacpp-cuda`) → Q4_K_M, ctx 8192, 8 slots, full offload | 645 | 72 | n/r | n/r | 0.44 |
-| llama.cpp Q4_K_M, 4 slots, full offload (stage-1 baseline; Ollama-style defaults) | 545 | 952 | n/r | n/r | 0.80 |
-| Ollama defaults | _not measured_ | | | | |
+> Across 6 GPU/model/workload combinations, PolyServe improves throughput by a median of **+51%** (range +7% to +67%) over the best stock/default configuration that satisfies the requested latency SLO, winning 6 of 6.
 
-Calibration on this machine: 10 trials, 35 minutes with vLLM in the mix (vLLM startup with fp8 quantisation and CUDA-graph capture dominates; each trial's workload is ~10 s), 4 minutes for the llama.cpp-only run. n/r = not recorded in that run. The llama.cpp rows show the other kind of win: same quant, same offload, but 8 server slots instead of 4 turns a 952 ms queueing TTFT into 72 ms under an 8-client load. Peak memory for vLLM is its `gpu_memory_utilization` pre-allocation, not live usage. The fp8 pick is 1.5× the throughput and 31% less energy per token than bf16 on the same card, which is the kind of decision a default never makes for you.
+| workload | PolyServe pick | tok/s | best default meeting SLO | tok/s | gain | TTFT Δ | J/token gain | calibration |
+|---|---|---|---|---|---|---|---|---|
+| `chat` | vLLM fp8, ctx 8192, batch 64 | **1091** | vLLM defaults | 653 | **+67%** | −3 ms | +42% | 399 s / 10 trials |
+| `generation` | vLLM fp8, ctx 8192, batch 16 | **1111** | vLLM defaults | 683 | **+63%** | −7 ms | +38% | 1937 s / 10 trials |
+| `default` | vLLM fp8, ctx 8192, batch 64 | **1097** | vLLM defaults | 687 | **+60%** | −8 ms | +38% | 480 s / 10 trials |
+| `long-context` | vLLM fp8, ctx 32768, batch 16 | **436** | vLLM defaults | 305 | **+43%** | −1 ms | +32% | 397 s / 8 trials |
+| `rag` | vLLM fp8, ctx 16384, batch 64 | **705** | vLLM defaults | 504 | **+40%** | −23 ms | +30% | 370 s / 8 trials |
+| `high-concurrency` | vLLM fp8, ctx 8192, batch 64 | **3628** | vLLM defaults | 3404 | **+7%** | −126 ms | +6% | 730 s / 10 trials |
 
-The full matrix (A100, RTX 3090, A30, GTX 1080, CPU × Llama-3B / Llama-8B / Qwen-7B × workloads) is produced by `polyserve compare` on each machine and collected under [benchmarks/](benchmarks/). `polyserve report` turns the results into [benchmarks/RESULTS.md](benchmarks/RESULTS.md) and a throughput-vs-TTFT plot, and states the headline the project is judged on:
+In every row PolyServe improved throughput and reduced time to first token, so none of the gain is bought by spending latency. Calibrating all six workloads cost 71 minutes on this card, paid once and cached.
 
-> Across N GPU/model/workload combinations, PolyServe improves throughput by a median of X% over the best stock/default configuration that satisfies the requested latency SLO.
+**What made the difference?** Most of the gain came from choosing fp8 over vLLM's default bf16 on Ampere, and matching batch and context sizes to the workload instead of using the model's 32k maximum. The benefit was smaller at high concurrency: with 128 concurrent clients, stock vLLM already kept the card busy. Throughput improved by 7%, while time to first token fell from 276 ms to 142 ms. Under the same load, llama.cpp and Ollama missed the latency target, with first-token waits of 9.6 s and 17 s respectively, because their defaults served one request at a time.
 
-Every _pending_ cell is a placeholder, not a claim; the headline is computed only from combinations where both PolyServe and the baseline meet the SLO.
+### Memory planner accuracy
+
+Each trial compares the planner's memory estimate with actual allocations reported by NVML and the backend's startup log. Run `polyserve memory-report` to see the comparison, or add `--apply` to fit the planner's constants to your machine.
+
+| backend | scored on | trials | mean abs error | bias | worst under-prediction | OOMs |
+|---|---|---|---|---|---|---|
+| vLLM | weights + workspace | 42 | **6.9%** | +3.1% | −12.9% | 0 |
+| llama.cpp (CUDA) | peak device memory | 32 | **16.6%** | +16.6% | 0.0% | 0 |
+
+Across 66 measured trials the planner predicts its target within **11.6%** on average, worst under-prediction −12.9%, and **zero out-of-memory failures among the configurations it admitted**. That last number is the one the planner is judged on: an admitted config that then OOMs is a planner failure regardless of average error.
+
+The two backends are scored on different quantities on purpose. vLLM and SGLang size their KV pool to fill `gpu_memory_utilization × VRAM`, so their peak memory is a policy choice, not a requirement; scoring against it compares two different things. In this run vLLM's KV pool was **7.7× larger** than the planner budgeted, which is why the conservative `PAGED_KV_FRACTION` never rejected a workable config. llama.cpp allocates exactly what it is asked for, so it is scored on peak memory; its error is entirely over-prediction, traced to a hand-set 768 MB workspace constant against the 253 MB `polyserve memory-report --apply` fitted from these trials.
+
+### Performance predictor
+
+The predictor uses a roofline model with three parameters per backend. `polyserve fit` learns them from trials on the same machine. Accuracy is checked by leaving one trial out at a time and predicting its result.
+
+| backend | observations | error, fitted | error, priors only | rank correlation (Spearman ρ) |
+|---|---|---|---|---|
+| vLLM | 90 | **22.1%** | 35.1% | **0.90** |
+| llama.cpp (CUDA) | 78 | **23.4%** | 54.5% | **0.83** |
+
+Fitting reduces the error by a third for vLLM and by more than half for llama.cpp. For narrowing the search, getting the ranking right matters more than predicting exact throughput. A rank correlation near 0.9 helps the predictor identify quantizations that are unlikely to win, saving a benchmark run.
+
+The predictor still has limits. The fitted bandwidth and compute efficiencies reach their cap of 1.0, suggesting that the roofline model built on vendor peak numbers underestimates what these engines achieve. TTFT predictions are also much less accurate than throughput predictions: scheduling and queueing have a large effect, and the model only approximates them.
+
+### Not yet measured
+
+These runs did not include an A100, A30, GTX 1080, a CPU-only setup, or a second model size. Those measurements are still needed. The matrix in [benchmarks/README.md](benchmarks/README.md) tracks the planned runs; its cells are placeholders until results are available.
 
 ## Backend interface
 
-New hardware is a new class, no core changes:
+To add support for new hardware, implement a backend class with the following interface. The core runtime stays the same:
 
 ```python
 class Backend(Protocol):
@@ -179,7 +224,7 @@ pip install -e .[dev]
 pytest            # all tests run without a GPU or any backend installed
 ```
 
-Technical notes on the memory planner, staged search and energy objective: [docs/writeup.md](docs/writeup.md).
+For more detail on the memory planner, staged search and energy objective, see the [technical writeup](docs/writeup.md).
 
 ## License
 
