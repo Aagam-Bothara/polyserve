@@ -35,6 +35,10 @@ class Constraints:
     tok_s_floor_frac: float = 0.5  # latency / efficiency: floor = frac x best tok/s
     tok_s_floor_abs: Optional[float] = None  # overrides the fraction when set
     noise_tolerance: float = 0.02  # scores within 2% are ties -> prefer larger ctx, then batch
+    # A power-capped or clock-locked variant of the leading config may cost up to this much of its
+    # score and still be chosen, when it uses less energy. The default keeps savings "free":
+    # within run-to-run noise of the uncapped result.
+    power_max_loss: float = 0.02
 
     def tok_s_floor(self, results: Sequence[TrialResult]) -> float:
         if self.tok_s_floor_abs is not None:
@@ -105,16 +109,36 @@ def _capability(r: TrialResult) -> Tuple[int, int, float]:
     return (c.ctx, c.batch, mem)
 
 
-def _break_ties(ranked: List[Ranked], tol: float) -> List[Ranked]:
-    """Within the leading cluster of feasible, near-equal scores, prefer the more capable config."""
-    if not ranked or not ranked[0].feasible or tol <= 0:
+def _joules(x: Ranked) -> float:
+    j = x.metrics.joules_per_token
+    return j if (j is not None and math.isfinite(j)) else math.inf
+
+
+def _break_ties(ranked: List[Ranked], cons: Constraints) -> List[Ranked]:
+    """Within the leading cluster of feasible, near-equal scores: larger config first, then less energy.
+
+    Two things join the leader's cluster: anything within `noise_tolerance` of its score, and any
+    power-capped or clock-locked variant of the same configuration within `power_max_loss`.
+    Variants share context, batch and memory settings, so the energy key decides between them,
+    and a cap that saves joules at no measurable throughput cost wins over running uncapped.
+    """
+    if not ranked or not ranked[0].feasible:
         return ranked
-    best = ranked[0].score
-    span = abs(best) * tol
-    cluster = [x for x in ranked if x.feasible and abs(x.score - best) <= span]
+    lead = ranked[0]
+    span = abs(lead.score) * max(cons.noise_tolerance, 0.0)
+    power_span = abs(lead.score) * max(cons.power_max_loss, cons.noise_tolerance, 0.0)
+    lead_base = lead.result.config.base_key()
+
+    def joins(x: Ranked) -> bool:
+        if not x.feasible:
+            return False
+        gap = abs(x.score - lead.score)
+        return gap <= span or (x.result.config.base_key() == lead_base and gap <= power_span)
+
+    cluster = [x for x in ranked if joins(x)]
     if len(cluster) < 2:
         return ranked
-    cluster.sort(key=lambda x: _capability(x.result), reverse=True)
+    cluster.sort(key=lambda x: (tuple(-v for v in _capability(x.result)), _joules(x)))
     rest = [x for x in ranked if x not in cluster]
     return cluster + rest
 
@@ -136,7 +160,7 @@ def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constrai
         per_level.sort(key=_sort_key)
         ranked.append(per_level[0])
     ranked.sort(key=_sort_key)
-    return _break_ties(ranked, cons.noise_tolerance)
+    return _break_ties(ranked, cons)
 
 
 def pick(

@@ -46,7 +46,7 @@ def _fmt(x: Optional[float], nd: int = 1, suffix: str = "") -> str:
 
 def _trial_table(results: List[TrialResult], winner: Optional[str] = None) -> Table:
     t = Table(title="Calibration", show_lines=False)
-    for col in ("stage", "config", "tok/s", "TTFT ms", "TPOT ms", "peak MB", "W", "J/tok", "status"):
+    for col in ("stage", "config", "tok/s", "TTFT ms", "TPOT ms", "peak MB", "W", "MHz", "J/tok", "status"):
         t.add_column(col, justify="right" if col not in ("stage", "config", "status") else "left",
                      overflow="fold", min_width=(40 if col == "config" else None))
     for r in results:
@@ -55,7 +55,7 @@ def _trial_table(results: List[TrialResult], winner: Optional[str] = None) -> Ta
         key = r.config.key()
         style = "bold green" if winner and key == winner else None
         t.add_row(r.stage, key, _fmt(m.tok_s), _fmt(m.ttft_ms, 0), _fmt(m.tpot_ms, 1), _fmt(m.peak_mem_mb, 0),
-                  _fmt(m.power_w, 0), _fmt(m.joules_per_token, 3), status, style=style)
+                  _fmt(m.power_w, 0), _fmt(m.sm_clock_mhz, 0), _fmt(m.joules_per_token, 3), status, style=style)
     return t
 
 
@@ -97,7 +97,29 @@ def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], wo
     return Constraints(ttft_ceiling_ms=ceiling, tok_s_floor_abs=tok_s_floor)
 
 
+def _power_mode(value: str) -> str:
+    from polyserve.power import MODES
+
+    if value not in MODES:
+        raise typer.BadParameter(f"power must be one of {', '.join(MODES)}")
+    return value
+
+
+def _power_controller(profile: Profile):
+    """A controller for serving/comparing a profile that carries a power setting, else None."""
+    if profile.config.power_limit_w is None and profile.config.sm_clock_mhz is None:
+        return None
+    from polyserve.power import controller_for
+
+    return controller_for(profile.hardware.gpu.index if profile.hardware.gpu else 0)
+
+
 WORKLOAD_OPT = typer.Option("default", "--workload", "-w", help="Workload preset; see `polyserve workloads`")
+POWER_OPT = typer.Option(
+    "off", "--power", callback=_power_mode,
+    help="Energy tuning: off | cap (power limit) | clock (locked SM clock) | both. Needs root; machine-wide; "
+         "restored on exit and by `polyserve power reset`.",
+)
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 
 
@@ -211,6 +233,7 @@ def bench(
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None, help="latency/efficiency: absolute tok/s floor"),
     save: bool = typer.Option(False, "--save", help="Also write the winning profile to the cache"),
+    power: str = POWER_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from polyserve import cache as profile_cache
@@ -228,7 +251,8 @@ def bench(
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     profile = calibrate(hw, spec, objective, result, reg, workload=wl,
-                        constraints=_constraints(ttft_ceiling, tok_s_floor, wl), progress=_progress)
+                        constraints=_constraints(ttft_ceiling, tok_s_floor, wl), progress=_progress,
+                        power_mode=power)
     console.print(_trial_table(profile.calibration_table, winner=profile.config.key()))
     _print_profile(profile)
     if save:
@@ -243,6 +267,7 @@ def recalibrate(
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
+    power: str = POWER_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from polyserve.pipeline import resolve_profile
@@ -250,7 +275,8 @@ def recalibrate(
     wl = _workload(workload)
     profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl),
-                              progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"))
+                              progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              power_mode=power)
     console.print(_trial_table(profile.calibration_table, winner=profile.config.key()))
     _print_profile(profile)
 
@@ -266,6 +292,7 @@ def compare(
     out: Optional[Path] = typer.Option(None, "--out", help="Results directory (default benchmarks/results)"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
+    power: str = POWER_OPT,
 ) -> None:
     """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from polyserve.bench import compare as _compare, to_markdown
@@ -278,7 +305,8 @@ def compare(
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
-                              progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"))
+                              progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              power_mode=power)
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl)
@@ -296,7 +324,8 @@ def compare(
 
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
-                      log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{wl.name}")
+                      log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{wl.name}",
+                      power=_power_controller(profile))
     path = save(result, out)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")
@@ -451,6 +480,7 @@ def serve(
     skip_calibration: bool = typer.Option(False, "--skip-calibration", help="Serve with backend defaults"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None, help="latency/efficiency: absolute tok/s floor"),
+    power: str = POWER_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -464,7 +494,8 @@ def serve(
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl),
-                              progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"))
+                              progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              power_mode=power)
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")
@@ -472,7 +503,8 @@ def serve(
     be = get_backend(profile.backend)
     be.materialize(profile.prepared, [profile.config.quant])  # no-op if already on disk
     sup = Supervisor(be, profile.config, profile.prepared,
-                     log_path=profile_cache.logs_dir() / spec.safe_id / "serve.log")
+                     log_path=profile_cache.logs_dir() / spec.safe_id / "serve.log",
+                     power=_power_controller(profile))
     err.print(f"[dim]starting {profile.backend} ...[/]")
     sup.start()
     app_ = create_app(sup.base_url, profile=profile, status_fn=sup.status)
@@ -487,6 +519,60 @@ def serve(
         uvicorn.run(app_, host=host, port=port, log_level="warning")
     finally:
         _shutdown()
+
+
+# --------------------------------------------------------------------------- power control
+
+power_app = typer.Typer(help="GPU power cap and clock lock used by --power (needs root).", no_args_is_help=True)
+app.add_typer(power_app, name="power")
+
+
+@power_app.command("status")
+def power_status() -> None:
+    """Show what this GPU allows: power limit range, supported clocks, and whether control is permitted."""
+    from polyserve import power as P
+    from polyserve.hardware import probe as _probe
+
+    hw = _probe()
+    if hw.gpu is None:
+        err.print("[red]no visible GPU; power tuning needs an NVIDIA GPU[/]")
+        raise typer.Exit(1)
+    try:
+        caps = P.controller_for(hw.gpu.index).capabilities()
+    except P.PowerControlUnavailable as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    console.print(f"[bold]GPU {caps.gpu_index}[/]: {hw.gpu.name}")
+    console.print(f"power limit: default {caps.power_limit_default_w} W, current {caps.power_limit_current_w} W, "
+                  f"allowed {caps.power_limit_min_w}-{caps.power_limit_max_w} W")
+    if caps.sm_clocks_mhz:
+        console.print(f"SM clocks: {caps.sm_clocks_mhz[-1]}-{caps.sm_clocks_mhz[0]} MHz "
+                      f"({len(caps.sm_clocks_mhz)} steps), max {caps.sm_clock_max_mhz} MHz")
+    for knob, ok in (("cap", caps.can_cap), ("clock", caps.can_lock)):
+        why = "" if ok else f"  ({caps.reasons.get(knob, 'unknown')})"
+        console.print(f"{'power capping' if knob == 'cap' else 'clock locking'}: "
+                      f"{'[green]permitted[/]' if ok else '[red]not permitted[/]'}{why}")
+    trying = [p.label() for p in P.candidate_points(caps, "both") if not p.is_default]
+    console.print(f"--power both would try: {', '.join(trying) if trying else 'nothing'}")
+    if P.pending_restore():
+        err.print("[yellow]a previous run left a power change behind; run `polyserve power reset`[/]")
+
+
+@power_app.command("reset")
+def power_reset(gpu: Optional[int] = typer.Option(None, "--gpu", help="GPU index (default: the recorded one)")) -> None:
+    """Undo a power cap or clock lock left behind by a crashed run."""
+    from polyserve import power as P
+
+    try:
+        state = P.reset_from_file(gpu)
+    except P.PowerControlUnavailable as exc:
+        err.print(f"[red]{exc}[/]")
+        raise typer.Exit(1)
+    if state:
+        console.print(f"restored GPU {state.get('gpu_index')} power limit to {int(state['power_limit_mw']) // 1000} W "
+                      "and unlocked clocks")
+    else:
+        console.print("no recorded change; unlocked clocks anyway")
 
 
 if __name__ == "__main__":

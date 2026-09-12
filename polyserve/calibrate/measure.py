@@ -37,6 +37,7 @@ class TelemetrySummary:
     peak_mem_mb: Optional[float] = None
     gpu_util_pct: Optional[float] = None
     power_w: Optional[float] = None
+    sm_clock_mhz: Optional[float] = None
     energy_j: Optional[float] = None
     samples: int = 0
 
@@ -47,6 +48,7 @@ class _Sample:
     mem_mb: Optional[float] = None
     util: Optional[float] = None
     power_w: Optional[float] = None
+    clock_mhz: Optional[float] = None
 
 
 def _summarize(samples: List[_Sample], source: str, extra_energy: Optional[float] = None) -> TelemetrySummary:
@@ -54,6 +56,9 @@ def _summarize(samples: List[_Sample], source: str, extra_energy: Optional[float
     mems = [x.mem_mb for x in samples if x.mem_mb is not None]
     utils = [x.util for x in samples if x.util is not None]
     powers = [(x.t, x.power_w) for x in samples if x.power_w is not None]
+    clocks = [x.clock_mhz for x in samples if x.clock_mhz is not None]
+    if clocks:
+        s.sm_clock_mhz = statistics.fmean(clocks)
     if mems:
         s.peak_mem_mb = max(mems)
     if utils:
@@ -111,6 +116,7 @@ class Telemetry:
                     mem_mb=x.memory_used_mb,
                     util=x.gpu_utilization_pct,
                     power_w=x.power_draw_watts,
+                    clock_mhz=x.sm_clock_mhz,
                 )
                 for x in raw
             ]
@@ -157,14 +163,15 @@ class Telemetry:
             return False
 
         def read() -> _Sample:
-            mem = util = power = None
+            mem = util = power = clock = None
             try:
                 mem = sum(pynvml.nvmlDeviceGetMemoryInfo(h).used for h in handles) / 2**20
                 util = statistics.fmean(pynvml.nvmlDeviceGetUtilizationRates(h).gpu for h in handles)
                 power = sum(pynvml.nvmlDeviceGetPowerUsage(h) for h in handles) / 1000.0
+                clock = statistics.fmean(pynvml.nvmlDeviceGetClockInfo(h, pynvml.NVML_CLOCK_SM) for h in handles)
             except Exception:
                 pass
-            return _Sample(t=time.monotonic(), mem_mb=mem, util=util, power_w=power)
+            return _Sample(t=time.monotonic(), mem_mb=mem, util=util, power_w=power, clock_mhz=clock)
 
         self._source = "pynvml"
         self._run_thread(read, on_stop=lambda: pynvml.nvmlShutdown())
@@ -405,6 +412,7 @@ def run_trial(
     peak_mem: Optional[float] = None
     utils: List[float] = []
     powers: List[float] = []
+    clocks: List[float] = []
     source = "none"
 
     for c in workload.concurrencies:
@@ -420,6 +428,9 @@ def run_trial(
         m.peak_mem_mb = s.peak_mem_mb
         m.gpu_util_pct = s.gpu_util_pct
         m.power_w = s.power_w
+        m.sm_clock_mhz = s.sm_clock_mhz
+        if s.sm_clock_mhz is not None:
+            clocks.append(s.sm_clock_mhz)
         if s.energy_j is not None and m.output_tokens:
             m.joules_per_token = s.energy_j / m.output_tokens
             total_energy += s.energy_j
@@ -443,6 +454,7 @@ def run_trial(
         peak_mem_mb=peak_mem,
         gpu_util_pct=statistics.fmean(utils) if utils else None,
         power_w=statistics.fmean(powers) if powers else None,
+        sm_clock_mhz=statistics.fmean(clocks) if clocks else None,
         joules_per_token=(total_energy / total_tokens) if (energy_known and total_tokens) else None,
         duration_s=sum(x.duration_s for x in per_level.values()),
         requests=sum(x.requests for x in per_level.values()),

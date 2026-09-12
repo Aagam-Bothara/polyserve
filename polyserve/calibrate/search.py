@@ -3,6 +3,8 @@
 1. quant / precision  - one short run per feasible (backend, quant); keep the top 2.
 2. memory config      - largest safe gpu_memory_utilization / offload layers / context.
 3. batch / concurrency - sweep max_num_seqs (vLLM/SGLang) or n_parallel/n_batch (llama.cpp).
+4. power (optional)   - on the leading config, sweep GPU power caps and/or locked SM clocks
+                        through NVML without relaunching, and keep the setting that saves energy.
 
 The winner is the objective's constrained argmax over *every* successful trial, not just stage 3.
 """
@@ -29,6 +31,7 @@ from polyserve.models import (
     TrialMetrics,
     TrialResult,
 )
+from polyserve.power import PowerSetting, setting_of, with_power
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,8 @@ class SubprocessTrialRunner:
         log_dir: Optional[Path] = None,
         startup_timeout: float = 900.0,
         request_timeout: float = 180.0,
+        power: Optional[object] = None,
+        power_settle_s: float = 2.0,
     ):
         self.backends = backends
         self.models = models
@@ -59,6 +64,32 @@ class SubprocessTrialRunner:
         self.log_dir = log_dir
         self.startup_timeout = startup_timeout
         self.request_timeout = request_timeout
+        self.power = power  # polyserve.power.PowerController, or None when energy tuning is off
+        self.power_settle_s = power_settle_s
+
+    def _apply_power(self, cfg: Config) -> Optional[str]:
+        """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
+        setting = setting_of(cfg)
+        if setting.is_default:
+            if self.power is not None and getattr(self.power, "applied", None) is not None:
+                self.power.restore()  # type: ignore[attr-defined]
+            return None
+        if self.power is None:
+            return "power setting requested but no power controller is configured"
+        try:
+            self.power.apply(setting)  # type: ignore[attr-defined]
+        except Exception as exc:
+            return f"power control unavailable: {exc}"
+        if self.power_settle_s > 0:
+            time.sleep(self.power_settle_s)  # let clocks and board power settle under the new limit
+        return None
+
+    def _restore_power(self) -> None:
+        if self.power is not None and getattr(self.power, "applied", None) is not None:
+            try:
+                self.power.restore()  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.error("power restore failed: %s", exc)
 
     def _predict(self, cfg: Config, backend: BaseBackend, model: PreparedModel):
         try:
@@ -88,6 +119,9 @@ class SubprocessTrialRunner:
                     config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
                     error=f"failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
                 )
+            perr = self._apply_power(cfg)
+            if perr:
+                return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr, memory=observation)
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout,
@@ -107,6 +141,62 @@ class SubprocessTrialRunner:
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False, error=str(exc),
                                memory=observation)
         finally:
+            self._restore_power()
+            if proc is not None:
+                proc.stop()
+
+    def sweep(
+        self,
+        base: Config,
+        settings: Sequence[PowerSetting],
+        stage: str,
+        progress: Optional[ProgressFn] = None,
+    ) -> List[TrialResult]:
+        """Launch `base` once, then measure it under each power setting in turn.
+
+        Power caps and clock locks take effect on a running server, so one launch serves the whole
+        sweep: faster than relaunching per point, and every point shares the same warm engine, so
+        differences come from the setting rather than from launch-to-launch variance. Include the
+        default setting to get a same-launch baseline.
+        """
+        backend = self.backends[base.backend]
+        model = self.models[base.backend]
+        port = free_port()
+        log_path = None
+        if self.log_dir:
+            log_path = self.log_dir / f"{int(time.time())}_{base.key().replace('/', '_')}_power.log"
+        hooks = backend.workload_hooks(self.hw, model)
+        results: List[TrialResult] = []
+        proc = None
+        try:
+            proc = backend.launch(base.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}), model,
+                                  port, log_path=log_path)
+            if not proc.wait_ready(timeout=self.startup_timeout):
+                err = f"failed to start (rc={proc.returncode()})\n{proc.tail_log(20)}"
+                return [TrialResult(config=with_power(base, s), stage=stage, metrics=TrialMetrics(), launched=False,
+                                    error=err) for s in settings]
+            for s in settings:
+                cfg = with_power(base, s)
+                if progress:
+                    progress(stage, cfg, None)
+                perr = self._apply_power(cfg)
+                if perr:
+                    res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr)
+                else:
+                    try:
+                        metrics = run_trial(f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
+                                            request_timeout=self.request_timeout)
+                        err = None if metrics.ok else f"{metrics.failed}/{metrics.requests} requests failed"
+                        res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err)
+                    except Exception as exc:
+                        logger.exception("power point %s crashed", cfg.key())
+                        res = TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=str(exc))
+                results.append(res)
+                if progress:
+                    progress(stage, cfg, res)
+            return results
+        finally:
+            self._restore_power()
             if proc is not None:
                 proc.stop()
 
@@ -166,6 +256,8 @@ class StagedSearch:
     models: Dict[str, PreparedModel] = field(default_factory=dict)
     workload: Optional[Workload] = None
     prune_below: float = 0.4  # skip a quant whose predicted best tok/s < this fraction of the best predicted
+    # Stage 4: power settings to try on the leading config (the default setting first). Empty = off.
+    power_points: List[PowerSetting] = field(default_factory=list)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
@@ -303,6 +395,43 @@ class StagedSearch:
             for c in variants:
                 self._run(c, "batch")
 
+    def stage_power(self, base: Config) -> None:
+        """Measure the leading config under each power setting and let the objective choose."""
+        settings = list(self.power_points)
+        if not any(not s.is_default for s in settings):
+            return
+        sweep = getattr(self.runner, "sweep", None)
+        if sweep is not None:
+            # One launch; the default setting is re-measured in it so every point shares a baseline.
+            for res in sweep(base, settings, "power", progress=self.progress):
+                self.results.append(res)
+                self._done.setdefault(res.config.key(), res)
+        else:
+            for s in settings:
+                if not s.is_default:
+                    self._run(with_power(base, s), "power")
+
+    def _power_note(self, winner: TrialResult) -> Optional[str]:
+        s = setting_of(winner.config)
+        base_key = winner.config.base_key()
+        uncapped = [r for r in self.results if r.ok and r.config.base_key() == base_key and setting_of(r.config).is_default]
+        tried = [r for r in self.results if r.config.base_key() == base_key and not setting_of(r.config).is_default]
+        if not tried:
+            return None
+        if s.is_default:
+            return f"power stage tried {len(tried)} settings; none saved energy within the allowed throughput loss"
+        if not uncapped:
+            return f"power setting chosen: {s.label()}"
+        ref = max(uncapped, key=lambda r: r.metrics.tok_s)
+        w, r = winner.metrics, ref.metrics
+        tok = (w.tok_s - r.tok_s) / r.tok_s * 100 if r.tok_s else 0.0
+        note = f"power setting chosen: {s.label()} ({tok:+.1f}% tok/s"
+        if w.joules_per_token and r.joules_per_token:
+            note += f", {(w.joules_per_token - r.joules_per_token) / r.joules_per_token * 100:+.1f}% J/token"
+        if w.power_w and r.power_w:
+            note += f", {w.power_w:.0f} W vs {r.power_w:.0f} W"
+        return note + " against the same config at default power)"
+
     # ---- entry
 
     def run(self, feasible: Sequence[Config]) -> Tuple[Optional[TrialResult], List[str]]:
@@ -315,5 +444,13 @@ class StagedSearch:
             ]
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
+        if self.power_points:
+            leader, _ = pick(self.results, self.objective, self.constraints)
+            if leader is not None:
+                self.stage_power(leader.config.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}))
         winner, notes = pick(self.results, self.objective, self.constraints)
+        if winner is not None and self.power_points:
+            pn = self._power_note(winner)
+            if pn:
+                notes.append(pn)
         return winner, self.notes + notes

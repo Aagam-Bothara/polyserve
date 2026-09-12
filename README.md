@@ -107,12 +107,27 @@ Choose what you want to optimise. PolyServe ranks configurations using the rules
 
 The minimum throughput defaults to 50% of the best observed tokens per second. Set `--tok-s-floor` to use an absolute value instead. If no configuration meets the constraint, PolyServe chooses the one that comes closest and records that in the profile.
 
+### Energy tuning: power cap and clock lock
+
+LLM decode is memory-bandwidth bound. Past a certain core clock the SMs wait on memory, so extra frequency buys almost no throughput while power keeps rising. `--power` adds a fourth calibration stage that looks for that point on the winning configuration:
+
+| `--power` | What it sweeps |
+|---|---|
+| `off` (default) | nothing |
+| `cap` | board power limit at 85%, 70% and 55% of the default |
+| `clock` | locked SM clock at 85%, 70% and 55% of the maximum, snapped to supported steps |
+| `both` | both sets: six points, not the cross product |
+
+Both knobs are applied through NVML to the already-running server, so the sweep needs a single launch and every point shares the same warm engine. The objective then decides. `efficiency` takes the lowest joules per token above its throughput floor. `balanced`, `latency` and `throughput` only accept a setting whose throughput is within 2% of the uncapped result, so the energy saving costs no measurable speed unless you ask for that trade. The chosen setting gets its own cached profile, is applied when `polyserve serve` starts, and appears at `/polyserve/profile`. Every trial also records the mean SM clock, which confirms that a lock actually took effect.
+
+Changing power or clocks needs root and affects the whole machine. PolyServe writes the original state to `~/.polyserve/power-restore.json` before the first change, restores it on exit and on SIGTERM, and `polyserve power reset` undoes it after a hard kill. `polyserve power status` shows the card's limits and whether control is permitted; when it is not, calibration records the reason and skips the stage instead of failing. **This stage is implemented and tested against a simulated NVML, and has not yet run on real hardware.**
+
 ---
 
 ## CLI
 
 ```
-polyserve serve <model> [--objective X] [--workload W] [--port N] [--backend NAME] [--skip-calibration]
+polyserve serve <model> [--objective X] [--workload W] [--power MODE] [--port N] [--backend NAME] [--skip-calibration]
 polyserve probe                 # print HardwareDescriptor
 polyserve workloads             # list workload presets
 polyserve plan <model>          # print feasible configs without running them
@@ -124,6 +139,8 @@ polyserve report                # aggregate results: median gain over the best S
 polyserve memory-report [--apply]  # planner prediction vs measured peak memory; --apply fits workspace + margin
 polyserve predict <model>       # predicted tok/s / TTFT for every feasible config, no launches
 polyserve fit [--apply]         # fit the predictor from cached calibrations; leave-one-out accuracy
+polyserve power status          # GPU power limit range, supported clocks, whether control is permitted
+polyserve power reset           # undo a power cap or clock lock left behind by a crashed run
 ```
 
 To start serving without waiting for benchmarks, use `--skip-calibration`. This launches the first candidate backend with default settings and does not cache a profile.
@@ -220,6 +237,7 @@ These are gaps, not claims. In rough order of how much they would change the con
 2. **A second model size.** Everything here is 3B on GPU and 0.5B on CPU. A 7B or 8B model on 24 GB is where the memory planner actually binds, and where the search may contribute more than it does at 3B.
 3. **Other accelerators.** A100, A30 and a pre-Turing card (GTX 1080) are untested, so the compute-capability branch in the selector has never run on real hardware. SGLang is implemented and has never been benchmarked at all.
 4. **Whether the search helps on GPU at all.** The isolation experiment says it does not, on one card with one model at three workloads. Finding out whether that holds on a card where memory is tight, or is an artifact of a 3B model on 24 GB, is the most interesting open question in this repository.
+5. **Energy tuning on real hardware.** `--power` has only run against a simulated NVML. It needs root on the host, so it has to be measured on a machine you control. Whether the energy-optimal point sits near 70% of full power for these workloads, and whether it differs between prefill-heavy `rag` and decode-heavy `generation`, is still a prediction.
 
 ## Backend interface
 

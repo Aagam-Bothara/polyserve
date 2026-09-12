@@ -152,12 +152,20 @@ def calibrate(
     progress: Optional[ProgressFn] = None,
     runner: Optional[TrialRunner] = None,
     log_dir: Optional[Path] = None,
+    power_mode: str = "off",
+    power_controller: Optional[object] = None,
+    power_points: Optional[list] = None,
 ) -> Profile:
     workload = workload or get_workload("default")
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms)
     feasible = plan.all_feasible
     if not feasible:
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")
+    controller, points, power_notes = None, [], []
+    if power_points is not None:  # injected (tests, or a caller that already probed the GPU)
+        controller, points = power_controller, list(power_points)
+    elif power_mode != "off":
+        controller, points, power_notes = setup_power(hw, power_mode, power_controller)
     if runner is None:
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},
@@ -165,16 +173,23 @@ def calibrate(
             hw=hw,
             workload=workload,
             log_dir=log_dir or (profile_cache.logs_dir() / spec.safe_id),
+            power=controller,
         )
     from polyserve.predict import Predictor
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
-                          predictor=Predictor(hw), models=plan.prepared, workload=workload)
+                          predictor=Predictor(hw), models=plan.prepared, workload=workload,
+                          power_points=points)
     t0 = time.monotonic()
-    winner, notes = search.run(feasible)
+    try:
+        winner, notes = search.run(feasible)
+    finally:
+        if controller is not None and getattr(controller, "applied", None) is not None:
+            controller.restore()  # type: ignore[attr-defined]
     if winner is None:
         raise RuntimeError("calibration failed: " + "; ".join(notes))
     elapsed = time.monotonic() - t0
+    notes = power_notes + notes
     notes.append(f"calibration took {elapsed:.0f}s over {len(search.results)} trials")
     notes.append(f"workload: {workload.describe()}")
     backend = reg[winner.config.backend]
@@ -183,7 +198,33 @@ def calibrate(
                            notes=notes, workload=workload, prepared_all=plan.prepared)
     profile.calibration_seconds = elapsed
     profile.calibration_trials = len(search.results)
+    profile.power_mode = power_mode
     return profile
+
+
+def setup_power(hw: HardwareDescriptor, mode: str, controller: Optional[object] = None):
+    """Probe what this GPU permits and build the stage-4 points. Returns (controller, points, notes)."""
+    from polyserve.power import PowerControlUnavailable, candidate_points, controller_for
+
+    if hw.gpu is None:
+        return None, [], [f"--power {mode} requested but no GPU is visible; power stage skipped"]
+    ctl = controller or controller_for(hw.gpu.index)
+    try:
+        caps = ctl.capabilities()  # type: ignore[attr-defined]
+    except PowerControlUnavailable as exc:
+        return None, [], [f"--power {mode} requested but unavailable: {exc}; power stage skipped"]
+    notes = []
+    if mode in ("cap", "both") and not caps.can_cap:
+        notes.append(f"power capping not permitted: {caps.reasons.get('cap', 'unknown reason')}")
+    if mode in ("clock", "both") and not caps.can_lock:
+        notes.append(f"clock locking not permitted: {caps.reasons.get('clock', 'unknown reason')}")
+    points = candidate_points(caps, mode)
+    trying = [p for p in points if not p.is_default]
+    if not trying:
+        notes.append("no power settings available to try; power stage skipped")
+        return None, [], notes
+    notes.append(f"power stage tried {len(trying)} settings: " + ", ".join(p.label() for p in trying))
+    return ctl, points, notes
 
 
 def resolve_profile(
@@ -197,6 +238,7 @@ def resolve_profile(
     progress: Optional[ProgressFn] = None,
     hw: Optional[HardwareDescriptor] = None,
     on_stage: Optional[Callable[[str], None]] = None,
+    power_mode: str = "off",
 ) -> Profile:
     """Cached profile if valid, else run the full pipeline and cache the result."""
     say = on_stage or (lambda s: None)
@@ -204,7 +246,7 @@ def resolve_profile(
     say("probe")
     hw = hw or probe()
     if not recalibrate and not skip_calibration:
-        cached = profile_cache.load(hw, spec, objective, workload.name)
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode)
         if cached is not None and (force_backend is None or cached.backend == force_backend):
             say("cache hit")
             return cached
@@ -218,6 +260,7 @@ def resolve_profile(
         say("defaults")
         return default_profile(hw, spec, plan, reg, objective, workload=workload)
     say("calibrate")
-    profile = calibrate(hw, spec, objective, plan, reg, workload=workload, constraints=constraints, progress=progress)
+    profile = calibrate(hw, spec, objective, plan, reg, workload=workload, constraints=constraints, progress=progress,
+                        power_mode=power_mode)
     profile_cache.save(profile)
     return profile

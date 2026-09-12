@@ -122,6 +122,7 @@ def compare(
     include: Optional[List[str]] = None,
     log_dir: Optional[Path] = None,
     progress: Optional[Callable[[str, Optional[ComparisonRow]], None]] = None,
+    power: Optional[object] = None,
 ) -> ComparisonResult:
     """Measure PolyServe's winner and every reference config under the same workload."""
     workload = workload or get_workload(profile.workload)
@@ -152,7 +153,7 @@ def compare(
 
     if runner is None:
         runner = SubprocessTrialRunner(backends=backends, models=models, hw=hw, workload=workload,
-                                       log_dir=log_dir)
+                                       log_dir=log_dir, power=power)
 
     result = ComparisonResult(
         polyserve_version=__version__,

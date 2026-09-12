@@ -27,6 +27,7 @@ class Supervisor:
         startup_timeout: float = 900.0,
         health_interval: float = 5.0,
         max_restarts: int = 5,
+        power: Optional[object] = None,
     ):
         self.backend = backend
         self.cfg = cfg
@@ -42,6 +43,8 @@ class Supervisor:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
+        self.power = power  # polyserve.power.PowerController when the profile carries a power setting
+        self.power_error: Optional[str] = None
 
     @property
     def base_url(self) -> str:
@@ -53,8 +56,25 @@ class Supervisor:
 
     def start(self) -> None:
         self._launch()
+        self._apply_power()
         self._thread = threading.Thread(target=self._watch, name="polyserve-supervisor", daemon=True)
         self._thread.start()
+
+    def _apply_power(self) -> None:
+        """Serve at the calibrated power setting. Failure is not fatal: the server runs uncapped."""
+        if self.cfg.power_limit_w is None and self.cfg.sm_clock_mhz is None:
+            return
+        from polyserve.power import setting_of
+
+        if self.power is None:
+            self.power_error = "profile has a power setting but no power controller was provided"
+            logger.warning(self.power_error)
+            return
+        try:
+            self.power.apply(setting_of(self.cfg))  # type: ignore[attr-defined]
+        except Exception as exc:
+            self.power_error = str(exc)
+            logger.warning("serving without the calibrated power setting: %s", exc)
 
     def _launch(self) -> None:
         with self._lock:
@@ -106,6 +126,11 @@ class Supervisor:
             self._thread.join(timeout=5)
         if self.process is not None:
             self.process.stop()
+        if self.power is not None and getattr(self.power, "applied", None) is not None:
+            try:
+                self.power.restore()  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.error("power restore failed: %s (run `polyserve power reset`)", exc)
 
     def status(self) -> dict:
         return {
@@ -115,4 +140,9 @@ class Supervisor:
             "alive": bool(self.process and self.process.alive()),
             "restarts": self.restarts,
             "last_error": self.last_error,
+            "power": {
+                "applied": (self.power.applied.label()  # type: ignore[attr-defined]
+                            if self.power is not None and getattr(self.power, "applied", None) else None),
+                "error": self.power_error,
+            },
         }

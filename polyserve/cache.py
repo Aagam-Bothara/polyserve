@@ -25,13 +25,17 @@ def logs_dir() -> Path:
     return polyserve_home() / "logs"
 
 
-def profile_path(hw_hash: str, model: ModelSpec, objective: str, workload: str = "default") -> Path:
+def profile_path(hw_hash: str, model: ModelSpec, objective: str, workload: str = "default",
+                 power: str = "off") -> Path:
     name = objective if workload == "default" else f"{objective}-{workload}"
+    if power != "off":
+        name += f"-power-{power}"
     return profiles_dir() / hw_hash / model.safe_id / f"{name}.json"
 
 
 def save(profile: Profile) -> Path:
-    path = profile_path(profile.hardware_hash, ModelSpec(hf_id=profile.model_id), profile.objective, profile.workload)
+    path = profile_path(profile.hardware_hash, ModelSpec(hf_id=profile.model_id), profile.objective, profile.workload,
+                        profile.power_mode)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
@@ -40,9 +44,10 @@ def save(profile: Profile) -> Path:
     return path
 
 
-def load(hw: HardwareDescriptor, model: ModelSpec, objective: str, workload: str = "default") -> Optional[Profile]:
+def load(hw: HardwareDescriptor, model: ModelSpec, objective: str, workload: str = "default",
+         power: str = "off") -> Optional[Profile]:
     """Return a cached profile if present and still valid for this hardware + backend version."""
-    path = profile_path(hardware_hash(hw), model, objective, workload)
+    path = profile_path(hardware_hash(hw), model, objective, workload, power)
     if not path.exists():
         return None
     try:

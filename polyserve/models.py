@@ -154,6 +154,9 @@ class Config(BaseModel):
     n_batch: Optional[int] = None  # llama.cpp logical batch
     kv_dtype: str = "auto"
     extra: Dict[str, Any] = Field(default_factory=dict)
+    # Energy tuning, applied through NVML while the backend runs rather than as launch flags.
+    power_limit_w: Optional[int] = None  # board power cap
+    sm_clock_mhz: Optional[int] = None  # upper bound of the locked SM clock range
 
     def key(self) -> str:
         parts = [self.backend, self.quant, f"ctx{self.ctx}", f"b{self.batch}"]
@@ -165,7 +168,15 @@ class Config(BaseModel):
             parts.append(f"nb{self.n_batch}")
         if self.kv_dtype != "auto":
             parts.append(f"kv{self.kv_dtype}")
+        if self.power_limit_w is not None:
+            parts.append(f"pl{self.power_limit_w}")
+        if self.sm_clock_mhz is not None:
+            parts.append(f"clk{self.sm_clock_mhz}")
         return "/".join(parts)
+
+    def base_key(self) -> str:
+        """Key without energy settings, so power variants of one configuration share it."""
+        return self.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}).key()
 
     def short(self) -> str:
         return self.key()
@@ -197,6 +208,7 @@ class TrialMetrics(BaseModel):
     peak_mem_mb: Optional[float] = None
     gpu_util_pct: Optional[float] = None
     power_w: Optional[float] = None  # mean device power during the trial
+    sm_clock_mhz: Optional[float] = None  # mean observed SM clock; confirms a clock lock took effect
     joules_per_token: Optional[float] = None
     duration_s: float = 0.0
     requests: int = 0
@@ -256,6 +268,7 @@ class Profile(BaseModel):
     objective: str
     workload: str = "default"
     workload_spec: Dict[str, Any] = Field(default_factory=dict)
+    power_mode: str = "off"  # "off" | "cap" | "clock" | "both"
     backend: str
     backend_version: Optional[str]
     config: Config
