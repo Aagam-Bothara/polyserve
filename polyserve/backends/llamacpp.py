@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -21,6 +23,20 @@ from polyserve.hardware import llama_server_binary
 from polyserve.hfconfig import load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, HardwareDescriptor, MiB, ModelSpec, PreparedModel
+
+
+@functools.lru_cache(maxsize=8)
+def server_help(binary: str) -> str:
+    """`llama-server --help`, to follow flag renames across llama.cpp versions. Empty if it cannot run."""
+    try:
+        out = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=60)
+        return out.stdout + out.stderr
+    except Exception:
+        return ""
+
+
+def _modern_spec(binary: str) -> bool:
+    return "--spec-type" in server_help(binary)
 
 logger = logging.getLogger(__name__)
 
@@ -131,12 +147,15 @@ class LlamaCppBackend(BaseBackend):
                 if any(cfg.extra.get(k) != v for k, v in o.items())]
 
     def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+        specs: List[str] = []
+        binary = llama_server_binary()
+        if binary and _modern_spec(binary):  # built-in n-gram lookup: no second model needed
+            specs.append(speculative.ngram(speculative.NGRAM_TOKENS_LLAMACPP))
         draft = speculative.draft_for(model.spec.hf_id)
         path = model.draft_paths.get(draft or "")
-        if not draft or not path or path.startswith(("hf://", "convert://")):
-            return []
-        spec = speculative.draft(draft, speculative.DRAFT_TOKENS_LLAMACPP)
-        return [] if spec == cfg.spec_decode else [cfg.model_copy(update={"spec_decode": spec})]
+        if draft and path and not path.startswith(("hf://", "convert://")):
+            specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_LLAMACPP))
+        return [cfg.model_copy(update={"spec_decode": s}) for s in specs if s != cfg.spec_decode]
 
     def _quants(self, model: PreparedModel) -> List[str]:
         return [q for q in GGUF_QUANTS if q in model.weights_bytes] or list(model.weights_bytes)
@@ -176,6 +195,24 @@ class LlamaCppBackend(BaseBackend):
 
     # ---- launch
 
+    def _spec_args(self, spec: str, model: PreparedModel, binary: str) -> List[str]:
+        """Speculative-decoding flags. llama.cpp (2026) moved to `--spec-type` and renamed --draft-max;
+        older builds only know the draft-model flags."""
+        kind, draft, k = speculative.parse(spec)
+        modern = _modern_spec(binary)
+        if kind == "ngram":
+            if not modern:
+                raise RuntimeError("this llama-server has no built-in n-gram speculative decoding")
+            return ["--spec-type", "ngram-mod", "--spec-ngram-mod-n-max", str(k)]
+        draft_path = model.draft_paths.get(draft or "")
+        if not draft_path or draft_path.startswith(("hf://", "convert://")):
+            raise RuntimeError(f"draft model for {spec} not materialized")
+        out = ["-md", draft_path]
+        out += ["--spec-type", "draft-simple", "--spec-draft-n-max", str(k)] if modern else ["--draft-max", str(k)]
+        if self.cuda:
+            out += ["-ngld", "999"]
+        return out
+
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         binary = llama_server_binary()
         if binary is None:
@@ -205,13 +242,7 @@ class LlamaCppBackend(BaseBackend):
         if cfg.kv_dtype != "auto":
             args += ["-ctk", cfg.kv_dtype, "-ctv", cfg.kv_dtype]
         if cfg.spec_decode:
-            kind, draft, k = speculative.parse(cfg.spec_decode)
-            draft_path = model.draft_paths.get(draft or "")
-            if kind != "draft" or not draft_path or draft_path.startswith(("hf://", "convert://")):
-                raise RuntimeError(f"draft model for {cfg.spec_decode} not materialized")
-            args += ["-md", draft_path, "--draft-max", str(k)]
-            if self.cuda:
-                args += ["-ngld", "999"]
+            args += self._spec_args(cfg.spec_decode, model, binary)
         args += render_extra(cfg.extra, skip=("threads",))
         env = {}
         if not self.cuda:

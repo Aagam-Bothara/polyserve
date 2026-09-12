@@ -28,7 +28,11 @@ DRAFTS = [
     (r"^meta-llama/Llama-3\.3-70B-Instruct$", "meta-llama/Llama-3.2-1B-Instruct"),
 ]
 
+# vLLM 0.11's V1 engine rejects a separate draft model ("not supported yet"); n-gram works there.
+VLLM_DRAFT_MIN = (0, 12)
+
 NGRAM_TOKENS = 4
+NGRAM_TOKENS_LLAMACPP = 64  # llama.cpp's ngram-mod default
 DRAFT_TOKENS_VLLM = 4
 DRAFT_TOKENS_LLAMACPP = 16
 
@@ -39,6 +43,19 @@ def draft_for(hf_id: str) -> Optional[str]:
         if re.match(pattern, hf_id):
             return draft
     return None
+
+
+def vllm_supports_draft(version: Optional[str] = None) -> bool:
+    """Whether the installed (or given) vLLM accepts a draft model for speculative decoding."""
+    if version is None:
+        try:
+            from importlib.metadata import version as installed
+
+            version = installed("vllm")
+        except Exception:
+            return False
+    m = re.match(r"(\d+)\.(\d+)", version or "")
+    return bool(m) and (int(m.group(1)), int(m.group(2))) >= VLLM_DRAFT_MIN
 
 
 def ngram(k: int = NGRAM_TOKENS) -> str:

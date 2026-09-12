@@ -24,6 +24,9 @@ import dataclasses
 import importlib.util
 import logging
 import socket
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -195,6 +198,7 @@ def create_pd_app(prefill_url: str, decode_url: str, profile: Optional[Profile] 
     app = FastAPI(title="PolyServe (disaggregated prefill/decode)", lifespan=lifespan)
 
     def _err(msg: str, code: int = 502) -> JSONResponse:
+        logger.warning("prefill/decode router: %s", msg)
         return JSONResponse({"error": {"message": msg, "type": "upstream_error"}}, status_code=code)
 
     @app.get("/health")
@@ -235,6 +239,7 @@ def create_pd_app(prefill_url: str, decode_url: str, profile: Optional[Profile] 
         except httpx.HTTPError as exc:
             return _err(f"prefill engine unavailable: {exc}")
         if pre.status_code != 200:
+            logger.warning("prefill engine returned HTTP %d: %s", pre.status_code, pre.text[:300])
             return Response(content=pre.content, status_code=pre.status_code,
                             media_type=pre.headers.get("content-type"))
         try:
@@ -265,32 +270,51 @@ def create_pd_app(prefill_url: str, decode_url: str, profile: Optional[Profile] 
     return app
 
 
-class BackgroundServer:
-    """Run an ASGI app on a local port in a thread (the router during calibration trials)."""
+class ProcessServer:
+    """Run a router (`python -m polyserve.router`) in its own process for a calibration trial.
 
-    def __init__(self, app: Any, port: Optional[int] = None):
-        import uvicorn
+    Not a thread: the load generator runs in the measuring process, and a router sharing its GIL
+    caps the very throughput it is there to measure.
+    """
 
+    def __init__(self, kind: str, urls: Sequence[str], request_timeout: Optional[float] = None,
+                 port: Optional[int] = None, log_path: Optional[Path] = None):
         self.port = port or _free_ports(1)[0]
-        self.server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=self.port, log_level="warning"))
-        self.thread = threading.Thread(target=self.server.run, name="polyserve-pd-router", daemon=True)
+        self.argv = [sys.executable, "-m", "polyserve.router", kind, "--port", str(self.port)]
+        if request_timeout is not None:
+            self.argv += ["--timeout", str(request_timeout)]
+        self.argv += list(urls)
+        self._proc: Optional[subprocess.Popen] = None
+        # Keep the router's log next to the engines' when there is a log directory: its warnings are
+        # the only record of why a request failed between the engines.
+        self._log = open(log_path, "w+b") if log_path else tempfile.TemporaryFile()
 
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
-    def start(self, timeout: float = 15.0) -> "BackgroundServer":
-        self.thread.start()
+    def start(self, timeout: float = 60.0) -> "ProcessServer":
+        self._proc = subprocess.Popen(self.argv, stdout=self._log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + timeout
-        while not self.server.started and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if not self.server.started:
-            raise RuntimeError("prefill/decode router failed to start")
-        return self
+        while time.monotonic() < deadline and self._proc.poll() is None:
+            try:
+                httpx.get(self.url + "/health", timeout=1.0)
+                return self
+            except httpx.HTTPError:
+                time.sleep(0.1)
+        self._log.seek(0)
+        tail = self._log.read().decode(errors="replace")[-800:]
+        self.stop()
+        raise RuntimeError(f"router failed to start: {tail}")
 
     def stop(self) -> None:
-        self.server.should_exit = True
-        self.thread.join(timeout=5)
+        if self._proc is not None and self._proc.poll() is None:
+            self._proc.terminate()
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self._proc.kill()
+        self._log.close()
 
 
 # --------------------------------------------------------------------------- processes
@@ -394,8 +418,9 @@ class DisaggTrialRunner:
         ctl = None
         results: List[TrialResult] = []
         try:
-            router = BackgroundServer(create_pd_app(pair.prefill_url, pair.decode_url,
-                                                    request_timeout=self.request_timeout)).start()
+            router = ProcessServer("pd", [pair.prefill_url, pair.decode_url], request_timeout=self.request_timeout,
+                                   log_path=(self.log_dir / f"{int(time.time())}_router.log") if self.log_dir
+                                   else None).start()
             hooks = self._hooks(base)
             for s in settings:
                 variant = with_decode_power(base, s)
@@ -421,9 +446,10 @@ class DisaggTrialRunner:
                                       disagg=variant)
                 else:
                     try:
-                        m = run_trial(router.url, hooks, self.workload, pid=None, request_timeout=self.request_timeout)
+                        m = run_trial(router.url, hooks, self.workload, pid=None,
+                                      request_timeout=self.request_timeout, clients=2)
                         res = TrialResult(config=variant.decode, stage=stage, metrics=m, disagg=variant,
-                                          error=None if m.ok else f"{m.failed}/{m.requests} requests failed")
+                                          error=None if m.ok else m.failure_summary())
                     except Exception as exc:
                         logger.exception("disaggregated trial crashed")
                         res = TrialResult(config=variant.decode, stage=stage, metrics=TrialMetrics(), error=str(exc),

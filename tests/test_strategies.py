@@ -72,18 +72,21 @@ def test_kv_flags_per_engine(prepared_vllm, prepared_llamacpp, monkeypatch):
     assert "-fa" not in plain
 
 
-def test_which_engines_offer_a_quantized_cache(hw_a100, monkeypatch):
+def test_which_engines_offer_a_quantized_cache(hw_a100, prepared_vllm, monkeypatch):
     import polyserve.backends.vllm as vl
 
     real = vl.importlib.util.find_spec
     monkeypatch.setattr(vl.importlib.util, "find_spec", lambda n: None if n == "flashinfer" else real(n))
-    assert get_backend("vllm").kv_dtypes(hw_a100) == []  # Ampere without FlashInfer cannot run an fp8 cache
+    assert get_backend("vllm").kv_dtypes(hw_a100) == []  # Ampere without FlashInfer: no fp8 cache
     monkeypatch.setattr(vl.importlib.util, "find_spec", lambda n: object() if n == "flashinfer" else real(n))
-    assert get_backend("vllm").kv_dtypes(hw_a100) == ["fp8"]
-    hopper = make_hw("a100")
-    hopper.gpus[0].compute_capability = (9, 0)
-    monkeypatch.setattr(vl.importlib.util, "find_spec", lambda n: None if n == "flashinfer" else real(n))
-    assert get_backend("vllm").kv_dtypes(hopper) == ["fp8"]
+    assert get_backend("vllm").kv_dtypes(hw_a100) == ["fp8_e5m2"]
+    ampere = get_backend("vllm").launch_spec(Config(backend="vllm", quant="bf16", kv_dtype="fp8_e5m2"),
+                                             prepared_vllm, 1)
+    assert ampere.env == {"VLLM_ATTENTION_BACKEND": "FLASHINFER"}
+    native = get_backend("vllm").launch_spec(Config(backend="vllm", quant="bf16", kv_dtype="fp8"), prepared_vllm, 1)
+    assert native.env == {}
+    assert get_backend("vllm").kv_dtypes(make_hw("rtx4090")) == ["fp8"]
+    assert get_backend("vllm").kv_dtypes(make_hw("gtx1080")) == []
     assert get_backend("sglang").kv_dtypes(hw_a100) == ["fp8_e5m2"]
     assert get_backend("llamacpp-cuda").kv_dtypes(hw_a100) == ["q8_0", "q4_0"]
     assert get_backend("vllm-cpu").kv_dtypes(make_hw("cpu-avx512")) == []
@@ -193,6 +196,24 @@ def test_quant_option_restricts_what_calibration_may_choose(hw_a100, spec):
     assert {c.quant for c in mixed.all_feasible} == {"fp8", "Q4_K_M"}
 
 
+@pytest.mark.usefixtures("no_network")
+def test_materializing_one_backend_does_not_filter_the_next(hw_a100, spec, monkeypatch):
+    # Regression: the survivors of backend 1's plan leaked into backend 2 as a --quant filter.
+    import polyserve.backends.llamacpp as lc
+    from polyserve.pipeline import prepare_and_plan
+
+    def fake_materialize(self, m, quants):
+        for q in quants:
+            m.gguf_paths[q] = f"/models/{q}.gguf"
+        return m
+
+    monkeypatch.setattr(lc.LlamaCppBackend, "materialize", fake_materialize)
+    monkeypatch.setattr(type(get_backend("vllm")), "materialize", lambda self, m, quants: m)
+    plan = prepare_and_plan(hw_a100, spec, ["vllm", "llamacpp-cuda"], registry(), materialize=True)
+    assert plan.errors == {} and set(plan.prepared) == {"vllm", "llamacpp-cuda"}
+    assert {c.backend for c in plan.all_feasible} == {"vllm", "llamacpp-cuda"}
+
+
 # =========================================================================== 3. prefix caching
 
 
@@ -293,7 +314,8 @@ def test_draft_models_share_the_family_tokenizer():
         S.parse("medusa:3")
 
 
-def test_vllm_speculative_variants_and_flags(prepared_vllm):
+def test_vllm_speculative_variants_and_flags(prepared_vllm, monkeypatch):
+    monkeypatch.setattr(S, "vllm_supports_draft", lambda version=None: True)
     be = get_backend("vllm")
     base = Config(backend="vllm", quant="fp8", ctx=4096, batch=16)
     variants = be.spec_variants(base, prepared_vllm)
@@ -304,6 +326,14 @@ def test_vllm_speculative_variants_and_flags(prepared_vllm):
     ngram = json.loads(be.launch_spec(variants[0], prepared_vllm, 1).args[-1])
     assert ngram["method"] == "ngram" and ngram["num_speculative_tokens"] == 4
     assert get_backend("vllm-cpu").spec_variants(base, prepared_vllm) == []
+
+
+def test_vllm_offers_draft_models_only_where_supported(prepared_vllm, monkeypatch):
+    assert not S.vllm_supports_draft("0.11.0") and S.vllm_supports_draft("0.12.1")
+    assert not S.vllm_supports_draft("junk")
+    monkeypatch.setattr(S, "vllm_supports_draft", lambda version=None: False)
+    variants = get_backend("vllm").spec_variants(Config(backend="vllm", quant="fp8"), prepared_vllm)
+    assert [c.spec_decode for c in variants] == ["ngram:4"]
 
 
 def test_llamacpp_speculation_needs_a_downloaded_draft(prepared_llamacpp, monkeypatch):
@@ -325,6 +355,25 @@ def test_llamacpp_speculation_needs_a_downloaded_draft(prepared_llamacpp, monkey
         be.launch_spec(v, remote, 1)
 
 
+def test_llamacpp_follows_the_renamed_speculative_flags(prepared_llamacpp, monkeypatch):
+    import polyserve.backends.llamacpp as lc
+
+    monkeypatch.setattr(lc, "llama_server_binary", lambda: "/opt/llama-server")
+    monkeypatch.setattr(lc, "server_help", lambda binary: "--spec-type ngram-mod\n--spec-draft-n-max N")
+    be = get_backend("llamacpp-cuda")
+    draft = "meta-llama/Llama-3.2-1B-Instruct"
+    local = prepared_llamacpp.model_copy(update={"draft_paths": {draft: "/models/draft-Q8_0.gguf"}})
+    base = Config(backend="llamacpp-cuda", quant="Q4_K_M", batch=4, n_gpu_layers=29)
+    ngram, drafted = be.spec_variants(base, local)
+    assert ngram.spec_decode == "ngram:64" and drafted.spec_decode.startswith("draft:")
+    a = be.launch_spec(ngram, local, 1).args
+    assert a[a.index("--spec-type") + 1] == "ngram-mod" and a[a.index("--spec-ngram-mod-n-max") + 1] == "64"
+    assert "-md" not in a
+    d = be.launch_spec(drafted, local, 1).args
+    assert d[d.index("--spec-type") + 1] == "draft-simple" and d[d.index("--spec-draft-n-max") + 1] == "16"
+    assert "--draft-max" not in d and d[d.index("-md") + 1] == "/models/draft-Q8_0.gguf"
+
+
 def test_latency_objective_counts_the_whole_answer():
     fast_start = TrialResult(config=Config(backend="vllm", quant="fp8", batch=64), stage="t",
                              metrics=TrialMetrics(tok_s=900, ttft_ms=40, tpot_ms=20, requests=16, output_tokens=2048))
@@ -332,6 +381,21 @@ def test_latency_objective_counts_the_whole_answer():
                               metrics=TrialMetrics(tok_s=800, ttft_ms=60, tpot_ms=5, requests=16, output_tokens=2048))
     w, _ = pick([fast_start, speculative], "latency", Constraints(tok_s_floor_abs=100))
     assert w is speculative  # 60 + 5 x 127 ms beats 40 + 20 x 127 ms
+
+
+def test_a_strategy_must_beat_noise_to_be_adopted():
+    # Measured on an A40 (rag-shared): KV quantization and n-gram speculation stacked on the leader
+    # tied it within 1%, and a lower-energy tie-break used to adopt them anyway.
+    def trial(tok_s: float, joules: float, **kw) -> TrialResult:
+        m = TrialMetrics(tok_s=tok_s, ttft_ms=50, tpot_ms=10, requests=16, output_tokens=2048,
+                         joules_per_token=joules)
+        return TrialResult(config=Config(backend="vllm", quant="gptq", batch=16, **kw), stage="t", metrics=m)
+
+    plain = trial(698, 0.50, prefill_budget=2048)
+    stacked = trial(692, 0.40, prefill_budget=2048, kv_dtype="fp8_e5m2", spec_decode="ngram:4")
+    assert pick([stacked, plain], "throughput")[0] is plain
+    faster = trial(760, 0.50, prefill_budget=2048, kv_dtype="fp8_e5m2")  # clear of the 2% band
+    assert pick([plain, faster], "throughput")[0] is faster
 
 
 # =========================================================================== 5. multi-GPU layouts

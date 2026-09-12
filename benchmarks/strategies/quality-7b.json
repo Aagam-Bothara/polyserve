@@ -1,0 +1,22 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "sequences": 24,
+  "seq_len": 1024,
+  "corpus": "https://www.gutenberg.org/files/11/11-0.txt",
+  "perplexity": {
+    "bf16": 2.2904721695904793,
+    "fp8": 2.3272659958419637,
+    "awq": 3.043073051624195,
+    "gptq": 3.1240125775925134
+  },
+  "checkpoints": {
+    "awq": "Qwen/Qwen2.5-7B-Instruct-AWQ",
+    "gptq": "Qwen/Qwen2.5-7B-Instruct-GPTQ-Int4"
+  },
+  "delta_pct": {
+    "bf16": 0.0,
+    "fp8": 1.606386086675871,
+    "awq": 32.85789244792594,
+    "gptq": 36.391640949344755
+  }
+}

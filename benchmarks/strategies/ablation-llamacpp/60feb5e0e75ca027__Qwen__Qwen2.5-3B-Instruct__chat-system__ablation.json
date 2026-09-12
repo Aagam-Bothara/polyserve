@@ -1,0 +1,370 @@
+{
+  "hardware_hash": "60feb5e0e75ca027",
+  "gpu": "NVIDIA A40",
+  "model_id": "Qwen/Qwen2.5-3B-Instruct",
+  "workload": "chat-system",
+  "objective": "balanced",
+  "workload_spec": {
+    "name": "chat-system",
+    "n_prompts": 16,
+    "prefill_tokens": 2048,
+    "decode_tokens": 128,
+    "concurrencies": [
+      1,
+      4,
+      8
+    ],
+    "ttft_ceiling_ms": 500.0,
+    "tpot_ceiling_ms": 50.0,
+    "shared_prefix_tokens": 1536,
+    "seed": 0
+  },
+  "rows": [
+    {
+      "label": "polyserve",
+      "strategy": "pick",
+      "note": "",
+      "config": {
+        "backend": "llamacpp-cuda",
+        "quant": "Q5_K_M",
+        "ctx": 16384,
+        "batch": 8,
+        "gpu_memory_utilization": null,
+        "n_gpu_layers": 37,
+        "n_batch": 512,
+        "prefill_budget": 256,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "ngram:64",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64",
+      "ok": true,
+      "concurrency": 4,
+      "tok_s": 427.39662234398423,
+      "ttft_ms": 190.7662134617567,
+      "ttft_p95_ms": 789.7972071077675,
+      "tpot_ms": 6.79242119374575,
+      "e2e_ms": 1053.403705067467,
+      "joules_per_token": 0.5190720952922676,
+      "peak_mem_mb": 7778.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 363.789298671271,
+          "ttft_ms": 91.44288557581604,
+          "tpot_ms": 2.0003128534652235,
+          "e2e_ms": 345.4826179658994
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 427.39662234398423,
+          "ttft_ms": 190.7662134617567,
+          "tpot_ms": 6.79242119374575,
+          "e2e_ms": 1053.403705067467
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 444.00729488799993,
+          "ttft_ms": 623.9810654660687,
+          "tpot_ms": 10.221758009347969,
+          "e2e_ms": 1922.1443326532608
+        }
+      }
+    },
+    {
+      "label": "+kv:q8_0",
+      "strategy": "kv",
+      "note": "",
+      "config": {
+        "backend": "llamacpp-cuda",
+        "quant": "Q5_K_M",
+        "ctx": 16384,
+        "batch": 8,
+        "gpu_memory_utilization": null,
+        "n_gpu_layers": 37,
+        "n_batch": 512,
+        "prefill_budget": 256,
+        "kv_dtype": "q8_0",
+        "prefix_cache": null,
+        "spec_decode": "ngram:64",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/kvq8_0/sd=ngram:64",
+      "ok": true,
+      "concurrency": 4,
+      "tok_s": 439.30153639121676,
+      "ttft_ms": 279.380060499534,
+      "ttft_p95_ms": 1016.1891230382025,
+      "tpot_ms": 5.803030795018064,
+      "e2e_ms": 1016.3649714668281,
+      "joules_per_token": 0.5114163006625503,
+      "peak_mem_mb": 5622.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 350.26025952948913,
+          "ttft_ms": 91.34890197310597,
+          "tpot_ms": 2.106359133732461,
+          "e2e_ms": 358.85651195712853
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 439.30153639121676,
+          "ttft_ms": 279.380060499534,
+          "tpot_ms": 5.803030795018064,
+          "e2e_ms": 1016.3649714668281
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 463.33950875883835,
+          "ttft_ms": 561.6108318790793,
+          "tpot_ms": 10.574644698791653,
+          "e2e_ms": 1904.5907086256193
+        }
+      }
+    },
+    {
+      "label": "+kv:q4_0",
+      "strategy": "kv",
+      "note": "",
+      "config": {
+        "backend": "llamacpp-cuda",
+        "quant": "Q5_K_M",
+        "ctx": 16384,
+        "batch": 8,
+        "gpu_memory_utilization": null,
+        "n_gpu_layers": 37,
+        "n_batch": 512,
+        "prefill_budget": 256,
+        "kv_dtype": "q4_0",
+        "prefix_cache": null,
+        "spec_decode": "ngram:64",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/kvq4_0/sd=ngram:64",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 326.6700811440587,
+      "ttft_ms": 338.1234895205125,
+      "ttft_p95_ms": 791.3828080054373,
+      "tpot_ms": 18.09994525282541,
+      "e2e_ms": 2636.8165366293397,
+      "joules_per_token": 0.7191418673040357,
+      "peak_mem_mb": 4470.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 165.01309001837672,
+          "ttft_ms": 90.4751765774563,
+          "tpot_ms": 5.334442511762815,
+          "e2e_ms": 767.9493755713338
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 290.4369635129853,
+          "ttft_ms": 121.86644214671105,
+          "tpot_ms": 11.13941571796698,
+          "e2e_ms": 1536.5722383285174
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 326.6700811440587,
+          "ttft_ms": 338.1234895205125,
+          "tpot_ms": 18.09994525282541,
+          "e2e_ms": 2636.8165366293397
+        }
+      }
+    },
+    {
+      "label": "+prefix:cache_reuse",
+      "strategy": "prefix",
+      "note": "",
+      "config": {
+        "backend": "llamacpp-cuda",
+        "quant": "Q5_K_M",
+        "ctx": 16384,
+        "batch": 8,
+        "gpu_memory_utilization": null,
+        "n_gpu_layers": 37,
+        "n_batch": 512,
+        "prefill_budget": 256,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "ngram:64",
+        "tp": 1,
+        "extra": {
+          "cache_reuse": 256
+        },
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64/cache_reuse=256",
+      "ok": true,
+      "concurrency": 4,
+      "tok_s": 416.7462897907384,
+      "ttft_ms": 222.60850702878088,
+      "ttft_p95_ms": 783.5467478726059,
+      "tpot_ms": 6.827351314750844,
+      "e2e_ms": 1089.6821240021382,
+      "joules_per_token": 0.5232647557834842,
+      "peak_mem_mb": 7778.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 353.49858014842295,
+          "ttft_ms": 100.90310999657959,
+          "tpot_ms": 2.0429337002826475,
+          "e2e_ms": 360.3556899324758
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 416.7462897907384,
+          "ttft_ms": 222.60850702878088,
+          "tpot_ms": 6.827351314750844,
+          "e2e_ms": 1089.6821240021382
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 491.11204365971696,
+          "ttft_ms": 555.0665541086346,
+          "tpot_ms": 9.79304596287653,
+          "e2e_ms": 1798.783391393954
+        }
+      }
+    },
+    {
+      "label": "+prefix:kv_unified",
+      "strategy": "prefix",
+      "note": "",
+      "config": {
+        "backend": "llamacpp-cuda",
+        "quant": "Q5_K_M",
+        "ctx": 16384,
+        "batch": 8,
+        "gpu_memory_utilization": null,
+        "n_gpu_layers": 37,
+        "n_batch": 512,
+        "prefill_budget": 256,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "ngram:64",
+        "tp": 1,
+        "extra": {
+          "kv_unified": true
+        },
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64/kv_unified=True",
+      "ok": true,
+      "concurrency": 4,
+      "tok_s": 481.85143961461677,
+      "ttft_ms": 159.67861155513674,
+      "ttft_p95_ms": 727.1802530158311,
+      "tpot_ms": 5.998632103946302,
+      "e2e_ms": 921.5048887563171,
+      "joules_per_token": 0.4676321200725581,
+      "peak_mem_mb": 7778.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 357.16587336892417,
+          "ttft_ms": 93.55677058920264,
+          "tpot_ms": 2.024472550870337,
+          "e2e_ms": 350.6647845497355
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 481.85143961461677,
+          "ttft_ms": 159.67861155513674,
+          "tpot_ms": 5.998632103946302,
+          "e2e_ms": 921.5048887563171
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 356.0432416378305,
+          "ttft_ms": 863.0153950070962,
+          "tpot_ms": 13.061588001483319,
+          "e2e_ms": 2521.8370711954776
+        }
+      }
+    },
+    {
+      "label": "-spec",
+      "strategy": "spec",
+      "note": "",
+      "config": {
+        "backend": "llamacpp-cuda",
+        "quant": "Q5_K_M",
+        "ctx": 16384,
+        "batch": 8,
+        "gpu_memory_utilization": null,
+        "n_gpu_layers": 37,
+        "n_batch": 512,
+        "prefill_budget": 256,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 397.35855959727047,
+      "ttft_ms": 382.4596070917323,
+      "ttft_p95_ms": 856.9524940103292,
+      "tpot_ms": 16.260991846009592,
+      "e2e_ms": 2447.6055715349503,
+      "joules_per_token": 0.6217735189925686,
+      "peak_mem_mb": 7674.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 144.44890171969712,
+          "ttft_ms": 96.91966359969229,
+          "tpot_ms": 6.182564488258286,
+          "e2e_ms": 882.1053536084946
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 286.1338906486307,
+          "ttft_ms": 120.09905697777867,
+          "tpot_ms": 11.854325079585529,
+          "e2e_ms": 1625.5983420851408
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 397.35855959727047,
+          "ttft_ms": 382.4596070917323,
+          "tpot_ms": 16.260991846009592,
+          "e2e_ms": 2447.6055715349503
+        }
+      }
+    }
+  ]
+}

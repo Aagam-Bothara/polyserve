@@ -17,9 +17,25 @@ from polyserve.calibrate.workload import Workload, get_workload
 from polyserve.hardware import hardware_hash, llmtrace_version, probe
 from polyserve.memory import plan as memory_plan
 from polyserve.models import Config, HardwareDescriptor, MemoryEstimate, ModelSpec, PreparedModel, Profile
+from polyserve.quantized import INT4_METHODS
 from polyserve.selector import select_backends
 
 logger = logging.getLogger(__name__)
+
+AUTO_QUANT = "auto"
+
+
+def allowed_quants(supported: List[str], quants: Optional[List[str]]) -> Optional[List[str]]:
+    """The precisions a backend may prepare under --quant. None: the backend lists none, so it decides.
+
+    `auto` (the default) is every supported precision except the Hub's 4-bit AWQ and GPTQ
+    checkpoints. On Qwen2.5 3B and 7B they raised perplexity by 26-36% where fp8 cost 1-2%, and a
+    server should not trade quality away unless asked: `--quant auto,awq` adds them back.
+    """
+    if not supported:
+        return None
+    wanted = quants if quants is not None else [AUTO_QUANT]
+    return [q for q in supported if q in wanted or (AUTO_QUANT in wanted and q not in INT4_METHODS)]
 
 
 @dataclass
@@ -45,7 +61,8 @@ class PlanResult:
 class SearchOptions:
     """Switches for the optional search dimensions. The defaults explore everything that is safe."""
 
-    quants: Optional[List[str]] = None  # None = every precision the backend supports
+    # None = auto: every supported precision but 4-bit checkpoints. A list may include "auto".
+    quants: Optional[List[str]] = None
     kv_quant: bool = True  # quantized KV caches
     speculative: bool = True  # n-gram and draft-model speculative decoding
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
@@ -65,6 +82,17 @@ class SearchOptions:
         if not self.phase_tuning:
             out["prefill"] = "off"
         return out
+
+    def allows(self, quant: str) -> bool:
+        """Whether --quant permits this precision (see allowed_quants)."""
+        return quant in (allowed_quants([quant], self.quants) or [])
+
+
+def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optional[str]) -> bool:
+    """Serve a cached profile only if it matches the forced backend and the current --quant: a
+    profile calibrated when `auto` still picked 4-bit checkpoints must not outlive that default."""
+    return (cached is not None and (force_backend is None or cached.backend == force_backend)
+            and opts.allows(cached.config.quant))
 
 
 def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
@@ -129,11 +157,9 @@ def prepare_and_plan(
     for name in candidates:
         backend = reg[name]
         try:
-            allowed = None
-            if quants is not None:
-                allowed = [q for q in backend.supported_quants(hw) if q in quants]
-                if not allowed:
-                    raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
+            allowed = allowed_quants(backend.supported_quants(hw), quants)
+            if quants is not None and allowed == []:
+                raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
             prepared = backend.prepare(spec, hw, quants=allowed)
             grid = backend.candidate_configs(hw, prepared, min_ctx=min_ctx)
             if not grid:
@@ -146,8 +172,8 @@ def prepare_and_plan(
             result.considered[name] = len(grid)
             logger.info("%s: %d/%d configs feasible", name, len(kept), len(grid))
             if materialize and kept:
-                quants = sorted({c.quant for c, _ in kept})
-                backend.materialize(prepared, quants)
+                survivors = sorted({c.quant for c, _ in kept})  # not `quants`: that filter applies to every backend
+                backend.materialize(prepared, survivors)
                 # Re-plan with true file sizes (GGUF sizes are estimates until downloaded).
                 result.feasible[name] = memory_plan(hw, prepared, grid, backend.memory_model(hw))
         except Exception as exc:
@@ -352,7 +378,7 @@ def resolve_profile(
                                on_stage, power_mode, opts, layout)
     if not recalibrate and not skip_calibration:
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=opts.key())
-        if cached is not None and (force_backend is None or cached.backend == force_backend):
+        if _usable(cached, opts, force_backend):
             say("cache hit")
             return cached
     say("select")
@@ -382,7 +408,7 @@ def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str
     if not recalibrate:
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, phases,
                                     options=(options or SearchOptions()).key())
-        if cached is not None and (force_backend is None or cached.backend == force_backend):
+        if _usable(cached, options or SearchOptions(), force_backend):
             say("cache hit")
             return cached
     if phases == "disaggregated":
@@ -416,7 +442,7 @@ def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str
     key = {**options.key(), "layout": layout}
     if not recalibrate:
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=key)
-        if cached is not None and (force_backend is None or cached.backend == force_backend):
+        if _usable(cached, options, force_backend):
             say("cache hit")
             return cached
     gpus = [g for g in hw.gpus if g.vendor == "nvidia"]

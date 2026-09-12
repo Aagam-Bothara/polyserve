@@ -84,6 +84,41 @@ def _probe_gpus_pynvml() -> List[GPUInfo]:
     return gpus
 
 
+def nvlink_between(indices: List[int]) -> Optional[bool]:
+    """Whether every GPU in `indices` has an active NVLink; None when NVML cannot tell.
+
+    Tensor parallelism over PCIe alone can hang in NCCL's peer-to-peer path inside containers
+    (measured on a pair of A40s), so a tensor-parallel launch needs to know its interconnect.
+    """
+    try:
+        import pynvml  # type: ignore
+
+        pynvml.nvmlInit()
+    except Exception:
+        return None
+    try:
+        for i in indices:
+            h = pynvml.nvmlDeviceGetHandleByIndex(i)
+            active = False
+            for link in range(18):  # NVML_NVLINK_MAX_LINKS
+                try:
+                    if pynvml.nvmlDeviceGetNvLinkState(h, link) == pynvml.NVML_FEATURE_ENABLED:
+                        active = True
+                        break
+                except Exception:
+                    break  # past this GPU's last link, or no NVLink at all
+            if not active:
+                return False
+        return True
+    except Exception:
+        return None
+    finally:
+        try:
+            pynvml.nvmlShutdown()
+        except Exception:
+            pass
+
+
 def _probe_gpus_torch() -> List[GPUInfo]:
     if importlib.util.find_spec("torch") is None:
         return []

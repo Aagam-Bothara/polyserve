@@ -181,7 +181,7 @@ class Config(BaseModel):
         if self.prefix_cache is not None:
             parts.append("pc" if self.prefix_cache else "nopc")
         if self.spec_decode is not None:
-            parts.append(f"sd[{self.spec_decode}]")
+            parts.append(f"sd={self.spec_decode}")  # no brackets: rich reads [..] as console markup
         if self.tp > 1:
             parts.append(f"tp{self.tp}")
         for k in sorted(self.extra):
@@ -238,6 +238,7 @@ class TrialMetrics(BaseModel):
     token_count_source: str = "none"  # "usage" | "tokenizer" | "chunks" (approximate) | "none"
     prompt_tokens: int = 0  # mean measured prompt length (0 if no tokenizer)
     by_concurrency: Dict[str, "TrialMetrics"] = Field(default_factory=dict)
+    errors: List[str] = Field(default_factory=list)  # up to three distinct request errors, when requests failed
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails
@@ -249,6 +250,11 @@ class TrialMetrics(BaseModel):
         if self.requests <= 0 or self.output_tokens <= 0:
             return False
         return self.failed <= self.FAILURE_TOLERANCE * self.requests
+
+    def failure_summary(self) -> str:
+        """'12/48 requests failed: <first error>' for a trial's error message."""
+        msg = f"{self.failed}/{self.requests} requests failed"
+        return f"{msg}: {self.errors[0]}" if self.errors else msg
 
 
 class DisaggSpec(BaseModel):

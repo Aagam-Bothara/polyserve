@@ -13,7 +13,12 @@ from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_
 from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from polyserve.hardware import nvlink_between
 from polyserve.quantized import INT4_METHODS, hf_weight_options
+
+# The fp8 KV-cache type offered on Ampere. It runs through FlashInfer: vLLM 0.11's default Triton
+# attention builds its fp8 kernels with e4m3, which Ampere cannot compile, whatever the cache type.
+AMPERE_FP8_KV = "fp8_e5m2"
 
 logger = logging.getLogger(__name__)
 
@@ -91,9 +96,10 @@ class VllmBackend(BaseBackend):
 
     def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
         cc = hw.gpu.cc if hw.gpu else (0, 0)
-        # An fp8 KV cache needs FlashAttention 3 (Hopper) or FlashInfer (Ampere, Ada).
-        if cc >= (9, 0) or (cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None):
+        if cc >= (8, 9):  # Ada, Hopper: e4m3
             return ["fp8"]
+        if cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None:  # Ampere, via FlashInfer
+            return [AMPERE_FP8_KV]
         return []
 
     def batch_ladder(self) -> Tuple[int, ...]:
@@ -102,7 +108,7 @@ class VllmBackend(BaseBackend):
     def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
         specs = [speculative.ngram()]
         draft = speculative.draft_for(model.spec.hf_id)
-        if draft:
+        if draft and speculative.vllm_supports_draft():
             specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
         return [cfg.model_copy(update={"spec_decode": s}) for s in specs if s != cfg.spec_decode]
 
@@ -170,7 +176,14 @@ class VllmBackend(BaseBackend):
         if model.spec.revision and cfg.quant not in INT4_METHODS:
             args += ["--revision", model.spec.revision]
         args += render_extra(cfg.extra)
-        return LaunchSpec(args=args)
+        env = {"VLLM_ATTENTION_BACKEND": "FLASHINFER"} if cfg.kv_dtype == AMPERE_FP8_KV else {}
+        # PCIe-only GPUs: peer-to-peer can hang at start-up inside containers. Measured on a pair of
+        # A40s: NCCL's P2P path hangs at init, and with only that disabled the engine's custom
+        # all-reduce (CUDA IPC, also P2P) hangs next. With both off it starts in under a minute.
+        if cfg.tp > 1 and nvlink_between(list(range(cfg.tp))) is False:
+            env["NCCL_P2P_DISABLE"] = "1"
+            args += ["--disable-custom-all-reduce"]
+        return LaunchSpec(args=args, env=env)
 
     # Chunked-prefill token budgets to try. Small budgets interleave prefill with decode and protect
     # per-token latency; large ones finish long prompts in fewer steps and cut time to first token.

@@ -35,7 +35,7 @@ from polyserve.backends.base import BaseBackend, Process
 from polyserve.calibrate.measure import run_trial
 from polyserve.calibrate.objectives import Constraints, pick
 from polyserve.calibrate.workload import Workload
-from polyserve.disagg import BackgroundServer, _free_ports, nvidia_gpus
+from polyserve.disagg import ProcessServer, _free_ports, nvidia_gpus
 from polyserve.models import Config, HardwareDescriptor, PreparedModel, Profile, TrialMetrics, TrialResult
 from polyserve.serve.proxy import HOP_BY_HOP
 
@@ -115,6 +115,7 @@ def create_lb_app(upstreams: List[str], profile: Optional[Profile] = None,
             up = await client.send(req, stream=True)
         except httpx.HTTPError as exc:
             _release(i)
+            logger.warning("load balancer: replica %d unavailable: %s", i, exc)
             return JSONResponse({"error": {"message": f"replica {i} unavailable: {exc}", "type": "upstream_error"}},
                                 status_code=502)
 
@@ -194,13 +195,17 @@ class LayoutTrialRunner:
                                replicas=len(gpus))
         lb = None
         try:
-            lb = BackgroundServer(create_lb_app(rs.urls, request_timeout=self.request_timeout)).start()
+            lb = ProcessServer("lb", rs.urls, request_timeout=self.request_timeout,
+                               log_path=(self.log_dir / f"{int(time.time())}_router.log") if self.log_dir else None
+                               ).start()
             hooks = self.backend.workload_hooks(self.hw, self.model)
             if hooks.gpu_ids:
                 hooks = dataclasses.replace(hooks, gpu_ids=list(gpus))
-            m = run_trial(lb.url, hooks, self.workload, pid=None, request_timeout=self.request_timeout)
+            # Two load-generator processes per replica: one Python client cannot drive several engines.
+            m = run_trial(lb.url, hooks, self.workload, pid=None, request_timeout=self.request_timeout,
+                          clients=2 * len(gpus))
             return TrialResult(config=cfg, stage=stage, metrics=m, replicas=len(gpus),
-                               error=None if m.ok else f"{m.failed}/{m.requests} requests failed")
+                               error=None if m.ok else m.failure_summary())
         except Exception as exc:
             logger.exception("replica trial crashed")
             return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=str(exc), replicas=len(gpus))
@@ -254,9 +259,17 @@ class ReplicaSupervisor:
 # --------------------------------------------------------------------------- calibration
 
 
+# Memory fraction for tensor-parallel engines. NCCL's buffers and the sharded engine's extra graphs
+# live outside the planner's model: at 0.95, a 2-way engine ran out of memory on each of two A40s.
+TP_MAX_GPU_MEMORY_UTILIZATION = 0.90
+
+
 def tp_candidates(cfg: Config, n: int) -> List[Config]:
     """Tensor-parallel shapes: the winner sharded n ways, and with the freed memory spent on batch."""
     base = _strip(cfg).model_copy(update={"tp": n})
+    if base.gpu_memory_utilization is not None:
+        base = base.model_copy(update={"gpu_memory_utilization": min(base.gpu_memory_utilization,
+                                                                     TP_MAX_GPU_MEMORY_UTILIZATION)})
     out = [base]
     doubled = base.model_copy(update={"batch": base.batch * 2})
     if doubled.prefill_budget is not None and doubled.prefill_budget < doubled.batch:

@@ -1,0 +1,374 @@
+{
+  "hardware_hash": "60feb5e0e75ca027",
+  "gpu": "NVIDIA A40",
+  "model_id": "Qwen/Qwen2.5-3B-Instruct",
+  "workload": "chat-system",
+  "objective": "balanced",
+  "workload_spec": {
+    "name": "chat-system",
+    "n_prompts": 16,
+    "prefill_tokens": 2048,
+    "decode_tokens": 128,
+    "concurrencies": [
+      1,
+      4,
+      8
+    ],
+    "ttft_ceiling_ms": 500.0,
+    "tpot_ceiling_ms": 50.0,
+    "shared_prefix_tokens": 1536,
+    "seed": 0
+  },
+  "rows": [
+    {
+      "label": "vllm-default",
+      "strategy": "baseline",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 32768,
+        "batch": 256,
+        "gpu_memory_utilization": 0.9,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx32768/b256/gmu0.90",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 431.9382084824256,
+      "ttft_ms": 255.46697597019374,
+      "ttft_p95_ms": 321.6369098518044,
+      "tpot_ms": 16.374534635239016,
+      "e2e_ms": 2335.032874645549,
+      "joules_per_token": 0.5210829552046902,
+      "peak_mem_mb": 42696.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 67.86418761470495,
+          "ttft_ms": 70.19426894839853,
+          "tpot_ms": 14.261339675849596,
+          "e2e_ms": 1881.3844077812973
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 242.05003604934197,
+          "ttft_ms": 171.00936209317297,
+          "tpot_ms": 15.306272174668953,
+          "e2e_ms": 2114.90592827613
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 431.9382084824256,
+          "ttft_ms": 255.46697597019374,
+          "tpot_ms": 16.374534635239016,
+          "e2e_ms": 2335.032874645549
+        }
+      }
+    },
+    {
+      "label": "vllm-fp8-default",
+      "strategy": "baseline",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "fp8",
+        "ctx": 32768,
+        "batch": 256,
+        "gpu_memory_utilization": 0.9,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/fp8/ctx32768/b256/gmu0.90",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 543.1629489631329,
+      "ttft_ms": 355.3940070560202,
+      "ttft_p95_ms": 555.672061862424,
+      "tpot_ms": 11.297017888291592,
+      "e2e_ms": 1790.1152788690524,
+      "joules_per_token": 0.41452455395745297,
+      "peak_mem_mb": 42728.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 98.20145614930757,
+          "ttft_ms": 87.07781950943172,
+          "tpot_ms": 9.550987888245814,
+          "e2e_ms": 1300.05328131665
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 330.5141046595733,
+          "ttft_ms": 274.42605746909976,
+          "tpot_ms": 10.06316749494079,
+          "e2e_ms": 1552.44832932658
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 543.1629489631329,
+          "ttft_ms": 355.3940070560202,
+          "tpot_ms": 11.297017888291592,
+          "e2e_ms": 1790.1152788690524
+        }
+      }
+    },
+    {
+      "label": "polyserve",
+      "strategy": "pick",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "gptq",
+        "ctx": 16384,
+        "batch": 256,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/gptq/ctx16384/b256/gmu0.95",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 729.3288957710236,
+      "ttft_ms": 271.99009095784277,
+      "ttft_p95_ms": 415.01048393547535,
+      "tpot_ms": 8.315260927802443,
+      "e2e_ms": 1328.028228788753,
+      "joules_per_token": 0.28312227266676265,
+      "peak_mem_mb": 44924.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 135.49277653190475,
+          "ttft_ms": 75.2898370847106,
+          "tpot_ms": 6.80169827723234,
+          "e2e_ms": 939.1055182932178
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 450.26860959035434,
+          "ttft_ms": 217.62571763247252,
+          "tpot_ms": 7.335110011901963,
+          "e2e_ms": 1149.1846891440218
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 729.3288957710236,
+          "ttft_ms": 271.99009095784277,
+          "tpot_ms": 8.315260927802443,
+          "e2e_ms": 1328.028228788753
+        }
+      }
+    },
+    {
+      "label": "-int4 (fp8)",
+      "strategy": "weights",
+      "note": "does not fit in memory",
+      "config": null,
+      "config_key": "-",
+      "ok": false
+    },
+    {
+      "label": "+kv:fp8_e5m2",
+      "strategy": "kv",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "gptq",
+        "ctx": 16384,
+        "batch": 256,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/gptq/ctx16384/b256/gmu0.95/kvfp8_e5m2",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 713.6700367272007,
+      "ttft_ms": 279.75980658084154,
+      "ttft_p95_ms": 424.17023913003504,
+      "tpot_ms": 8.494351114656073,
+      "e2e_ms": 1358.5423981421627,
+      "joules_per_token": 0.2799931501271298,
+      "peak_mem_mb": 45616.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 129.2525633911721,
+          "ttft_ms": 82.55755552090704,
+          "tpot_ms": 7.111833690927826,
+          "e2e_ms": 985.7604342687409
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 436.7714812727331,
+          "ttft_ms": 224.2179400054738,
+          "tpot_ms": 7.471333360977793,
+          "e2e_ms": 1173.0772768496536
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 713.6700367272007,
+          "ttft_ms": 279.75980658084154,
+          "tpot_ms": 8.494351114656073,
+          "e2e_ms": 1358.5423981421627
+        }
+      }
+    },
+    {
+      "label": "-prefix",
+      "strategy": "prefix",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "gptq",
+        "ctx": 16384,
+        "batch": 256,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": false,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/gptq/ctx16384/b256/gmu0.95/nopc",
+      "ok": true,
+      "concurrency": 4,
+      "tok_s": 318.3617331098146,
+      "ttft_ms": 426.45053507294506,
+      "ttft_p95_ms": 668.1910899933428,
+      "tpot_ms": 9.14699399585315,
+      "e2e_ms": 1588.118772546295,
+      "joules_per_token": 0.7394560464928694,
+      "peak_mem_mb": 44924.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 122.26766582262971,
+          "ttft_ms": 189.72695001866668,
+          "tpot_ms": 6.697320329359051,
+          "e2e_ms": 1040.286631847266
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 318.3617331098146,
+          "ttft_ms": 426.45053507294506,
+          "tpot_ms": 9.14699399585315,
+          "e2e_ms": 1588.118772546295
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 432.0634637450453,
+          "ttft_ms": 761.8485384155065,
+          "tpot_ms": 12.52104740053155,
+          "e2e_ms": 2352.0215582830133
+        }
+      }
+    },
+    {
+      "label": "+spec:ngram:4",
+      "strategy": "spec",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "gptq",
+        "ctx": 16384,
+        "batch": 256,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "ngram:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/gptq/ctx16384/b256/gmu0.95/sd=ngram:4",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 585.6720734451353,
+      "ttft_ms": 346.64772753603756,
+      "ttft_p95_ms": 385.4886598419398,
+      "tpot_ms": 11.056767910554836,
+      "e2e_ms": 1750.8572521765018,
+      "joules_per_token": 0.32215438264852164,
+      "peak_mem_mb": 45328.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 102.0574312502762,
+          "ttft_ms": 78.00593704450876,
+          "tpot_ms": 9.220761203208909,
+          "e2e_ms": 1249.0426098520402
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 334.13675296974037,
+          "ttft_ms": 216.40826750081033,
+          "tpot_ms": 10.25367519675248,
+          "e2e_ms": 1518.6250174883753
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 585.6720734451353,
+          "ttft_ms": 346.64772753603756,
+          "tpot_ms": 11.056767910554836,
+          "e2e_ms": 1750.8572521765018
+        }
+      }
+    }
+  ]
+}

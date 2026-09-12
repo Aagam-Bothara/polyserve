@@ -134,13 +134,26 @@ def _variant_key(r: TrialResult) -> str:
             + (f"|x{reps}" if reps > 1 else ""))
 
 
+def _strategies(r: TrialResult) -> int:
+    """Optional strategies a config switches on beyond the engine's defaults.
+
+    Within the noise band the config with fewer of them wins, so a strategy is adopted only when
+    it measurably helps. A quantized KV cache or speculative decoding that merely ties is complexity
+    (and, for the cache, a quality risk) with nothing to show for it.
+    """
+    c = r.config
+    return sum((c.kv_dtype != "auto", c.spec_decode is not None, c.prefill_budget is not None,
+                bool({"cache_reuse", "kv_unified"} & set(c.extra))))
+
+
 def _joules(x: Ranked) -> float:
     j = x.metrics.joules_per_token
     return j if (j is not None and math.isfinite(j)) else math.inf
 
 
 def _break_ties(ranked: List[Ranked], cons: Constraints) -> List[Ranked]:
-    """Within the leading cluster of feasible, near-equal scores: larger config first, then less energy.
+    """Within the leading cluster of feasible, near-equal scores: fewer optional strategies first, then
+    the larger config, then less energy.
 
     Two things join the leader's cluster: anything within `noise_tolerance` of its score, and any
     power-capped or clock-locked variant of the same configuration within `power_max_loss`.
@@ -163,7 +176,7 @@ def _break_ties(ranked: List[Ranked], cons: Constraints) -> List[Ranked]:
     cluster = [x for x in ranked if joins(x)]
     if len(cluster) < 2:
         return ranked
-    cluster.sort(key=lambda x: (tuple(-v for v in _capability(x.result)), _joules(x)))
+    cluster.sort(key=lambda x: (_strategies(x.result), tuple(-v for v in _capability(x.result)), _joules(x)))
     rest = [x for x in ranked if x not in cluster]
     return cluster + rest
 

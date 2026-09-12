@@ -52,11 +52,13 @@ A full grid would be 144 launches × ~30 s (engine startup dominates, not the 10
 
 The final choice is the objective's constrained argmax over **every** successful trial from all three stages, not only stage 3, so a stage-1 baseline that happens to be best is not lost. Trials are keyed by config and never repeated. A trial that fails to launch (OOM, unsupported flag) is recorded in the table with its log tail; it is data, not an exception.
 
-Each trial is measured at concurrency 1, 4 and 8, and the objective scores it at whichever level best satisfies the constraint. For `balanced` that is the highest-throughput level whose TTFT is still under the ceiling, so the winner is a (config, load) pair the server can actually be run at, not a throughput number achieved with a TTFT the constraint forbids. Scores within 2% are treated as ties and broken toward the larger context window, then the larger batch: a 1% tok/s edge is measurement noise, a doubled context is a capability.
+Later stages vary the leader along one dimension at a time: the prefill budget, the KV-cache type, prefix-cache flags (on workloads whose prompts share a prefix), speculative decoding, and optionally power. The README's Search options section lists them.
 
-On an RTX 3090 with Qwen2.5-3B this produced two decisions a default would not make: vLLM fp8 over bf16 (1065 vs 694 tok/s, 0.94 vs 1.37 J/token), and llama.cpp with 8 parallel slots instead of 4 (645 vs 545 tok/s, TTFT 72 ms vs 952 ms under the same 8-client load, because with 4 slots half the clients queue).
+Each trial is measured at concurrency 1, 4 and 8, and the objective scores it at whichever level best satisfies the constraint. For `balanced` that is the highest-throughput level whose TTFT is still under the ceiling, so the winner is a (config, load) pair the server can actually be run at, not a throughput number achieved with a TTFT the constraint forbids. Scores within 2% are treated as ties. A tie goes first to the configuration that switches on fewer optional strategies (a strategy is adopted only when it measurably wins), then to the larger context window, then the larger batch, then the lower energy: a 1% tok/s edge is measurement noise, a doubled context is a capability.
 
-Every trial uses the same fixed workload — 16 prompts × ~256-token prefill × 128-token decode, `temperature 0`, `ignore_eos`, at concurrency 1, 4 and 8 — so numbers are comparable across backends and across machines. Summary metrics come from the concurrency level with the highest throughput (the load the server would actually be run at); energy is total joules over total tokens across all levels.
+On an RTX 3090 with Qwen2.5-3B this produced two decisions a default would not make: vLLM fp8 over bf16 (1065 vs 694 tok/s, 0.94 vs 1.37 J/token), and llama.cpp with 8 parallel slots instead of 4 (645 vs 545 tok/s, TTFT 72 ms vs 952 ms under the same 8-client load, because with 4 slots half the clients queue). Those numbers came from the harness that replayed prompts across concurrency levels (see below), so their absolute values are inflated. Re-measured with fresh prompts on an A40, fp8 still beat bf16 on `chat` (592 vs 464 tok/s) but lost to it on the prefill-heavy `high-concurrency` workload (1358 vs 1724), where fp8's weight-only kernels on Ampere cost more in compute-bound prefill than they save in bandwidth. The llama.cpp slot decision has not been re-measured.
+
+Every trial uses the same fixed workload — 16 prompts × ~256-token prefill × 128-token decode, `temperature 0`, `ignore_eos`, at concurrency 1, 4 and 8 — so numbers are comparable across backends and across machines. Each concurrency level gets fresh prompts. Replaying one level's prompts at the next lets the engine's prefix cache make every later prefill nearly free: an early version of the harness did that and read one configuration at 3638 tok/s that measures 1814 with fresh prompts. A workload's deliberately shared prefix (the `chat-system` and `rag-shared` presets) is kept across levels, since caching it is the behaviour being measured. Summary metrics come from the concurrency level with the highest throughput (the load the server would actually be run at); energy is total joules over total tokens across all levels.
 
 ## 4. Measurement and the energy objective
 
@@ -67,7 +69,7 @@ The four objectives are all constrained argmax:
 | objective | minimise / maximise | subject to |
 |---|---|---|
 | throughput | max tok/s | — |
-| latency | min TTFT p50 | tok/s ≥ floor |
+| latency | min request latency (TTFT p50 + TPOT × output tokens) | tok/s ≥ floor |
 | balanced | max tok/s | TTFT p50 ≤ ceiling |
 | efficiency | min J/token | tok/s ≥ floor |
 

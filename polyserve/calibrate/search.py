@@ -143,7 +143,7 @@ class SubprocessTrialRunner:
             )
             err = None
             if not metrics.ok:
-                err = f"{metrics.failed}/{metrics.requests} requests failed"
+                err = metrics.failure_summary()
             elif metrics.failed:
                 logger.info("%s: tolerated %d/%d failed requests", cfg.key(), metrics.failed, metrics.requests)
             return TrialResult(config=cfg, stage=stage, metrics=metrics, error=err, memory=observation)
@@ -197,7 +197,7 @@ class SubprocessTrialRunner:
                     try:
                         metrics = run_trial(f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                                             request_timeout=self.request_timeout)
-                        err = None if metrics.ok else f"{metrics.failed}/{metrics.requests} requests failed"
+                        err = None if metrics.ok else metrics.failure_summary()
                         res = TrialResult(config=cfg, stage=stage, metrics=metrics, error=err)
                     except Exception as exc:
                         logger.exception("power point %s crashed", cfg.key())

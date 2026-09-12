@@ -19,9 +19,9 @@ PolyServe works with vLLM, SGLang and llama.cpp. It handles the setup questions 
 
 | Hardware | Backends tried | Status |
 |---|---|---|
-| NVIDIA, compute capability ≥ 7.5 (Turing and newer) | vLLM, SGLang, llama.cpp (CUDA) | vLLM and llama.cpp **benchmarked** on an RTX 3090; SGLang implemented, **never benchmarked** |
+| NVIDIA, compute capability ≥ 7.5 (Turing and newer) | vLLM, SGLang, llama.cpp (CUDA) | vLLM and llama.cpp **benchmarked** on an RTX 3090 and an A40, multi-GPU layouts on a pair of A40s; SGLang implemented, **never benchmarked** |
 | NVIDIA, compute capability < 7.5 (Pascal, Volta) | llama.cpp (CUDA) | implemented, **never benchmarked** |
-| x86 CPU | llama.cpp; vLLM-CPU if AVX-512 is present | implemented, **never benchmarked** |
+| x86 CPU | llama.cpp; vLLM-CPU if AVX-512 is present | llama.cpp **benchmarked** CPU-only on an i5-14600KF (with the old harness, see the correction under Benchmarks); vLLM-CPU **never benchmarked** |
 
 PolyServe runs on Linux with Python 3.10–3.13. The table above lists the backend candidates for each type of hardware; the benchmarks below show what has been measured so far.
 
@@ -67,7 +67,7 @@ flowchart LR
 
    A performance predictor helps narrow the search. Its roofline model accounts for weight and KV bandwidth, decode and prefill compute, and queueing beyond the available slots. `polyserve fit` fits three efficiency parameters per backend using your machine's trials. The predictor skips quantizations expected to perform far below the best and tests promising batch settings first. `polyserve predict` shows the predictions without launching a backend; `fit` reports leave-one-out error and rank correlation so you can check their accuracy.
 
-   Each trial replays a fixed synthetic workload. The default uses 16 prompts, a 256-token prefill and a 128-token decode at concurrency 1/4/8, taking roughly 10 seconds. [llmtrace](https://github.com/Aagam-Bothara/llmtrace) measures tokens per second, time to first token (TTFT), time per output token (TPOT), peak memory, GPU utilisation and power.
+   Each trial replays a fixed synthetic workload. The default uses 16 prompts, a 256-token prefill and a 128-token decode at concurrency 1/4/8, taking roughly 10 seconds. Each concurrency level gets fresh prompts, so a level never measures a prefix cache the previous level filled; only a workload's deliberately shared prefix repeats. [llmtrace](https://github.com/Aagam-Bothara/llmtrace) measures tokens per second, time to first token (TTFT), time per output token (TPOT), peak memory, GPU utilisation and power.
 
 6. **Save the results.** The chosen configuration, full launch arguments, calibration table and versions are saved in `~/.polyserve/profiles/<hardware_hash>/<model>/<objective>[-<workload>].json`. A hardware or backend version change invalidates the profile. You can also force a fresh run with `polyserve recalibrate`.
 
@@ -113,6 +113,8 @@ Every objective also respects a per-token latency (TPOT) ceiling, the decode-pha
 
 `latency` used to rank by TTFT alone. It now counts the whole answer, because speculative decoding leaves TTFT unchanged and cuts time per token, and a TTFT-only rule could never pick it. Profiles cached under the old rule should be recalibrated.
 
+Scores within 2% of each other count as a tie. A tie goes to the configuration that switches on fewer optional strategies (a quantized KV cache, speculative decoding, a non-default prefill budget, llama.cpp's prefix flags), so a strategy is adopted only when it measurably wins. After that, the larger context and batch win, then the lower energy per token.
+
 The minimum throughput defaults to 50% of the best observed tokens per second. Set `--tok-s-floor` to use an absolute value instead. If no configuration meets the constraint, PolyServe chooses the one that comes closest and records that in the profile.
 
 ### Energy tuning: power cap and clock lock
@@ -140,23 +142,23 @@ Prefill, which processes the prompt, is compute bound. Decode, which generates t
 | `disaggregated` | Two vLLM engines on two GPUs, joined by KV-cache transfer (NixlConnector by default; `--kv-connector`). The prefill engine gets a large prefill budget and few sequences, the decode engine many sequences and a small budget, and with `--power` only the decode GPU is capped. A router sends each request to the prefill engine for one token, takes the KV handle it returns, and streams the decode engine's output to the client. |
 | `auto` | Calibrates unified, measures the disaggregated pairs, and keeps whichever wins under the objective. On a machine that cannot disaggregate it serves unified and records why. |
 
-Disaggregation needs vLLM, two NVIDIA GPUs and the connector's package (`pip install nixl`). With `--phases disaggregated`, PolyServe checks all three before spending a calibration and refuses with the reason. Each engine's settings, the GPU split and the connector are cached in the profile, shown at `/polyserve/profile`, and restarted together if either engine dies. **The disaggregated mode is tested end to end against fake engines that follow vLLM's KV-transfer handshake, and has not yet run on real GPUs.**
+Disaggregation needs vLLM, two NVIDIA GPUs and the connector's package (`pip install nixl`). With `--phases disaggregated`, PolyServe checks all three before spending a calibration and refuses with the reason. Each engine's settings, the GPU split and the connector are cached in the profile, shown at `/polyserve/profile`, and restarted together if either engine dies. The disaggregated mode has run on two PCIe-linked A40s with NixlConnector (vLLM 0.11, nixl 1.4.1). On a 3B model and the `rag` workload it lost to a single engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), so `--phases auto` served unified, as designed. One of the two pairs tried failed a quarter of its requests because the decode engine never pulled their KV blocks.
 
 ### Search options
 
-The benchmarks below show where the GPU gain came from: fp8 weights, which halve the bytes each decode step reads. The next four options follow that lead, and the fifth adds GPUs. Each one adds a calibration stage on the current leader, and the objective decides whether the leader changes, so a strategy that loses on your machine is measured and dropped rather than assumed.
+The benchmarks below show where the GPU gain comes from: fewer bytes per weight, since every decode step reads all of them. The first four options follow that lead, and the fifth adds GPUs. Each one adds a calibration stage on the current leader, and the objective decides whether the leader changes, so a strategy that loses on your machine is measured and dropped rather than assumed.
 
 | Option | Default | What it adds |
 |---|---|---|
-| `--quant auto\|<list>` | `auto` | Which weight precisions calibration may choose. `auto` now includes 4-bit AWQ and GPTQ checkpoints on vLLM and SGLang: PolyServe finds a pre-quantized repository of the same model on the Hub (the model's author first, then known quantizers), confirms from its `quantization_config` that it really is 4-bit, and sizes it from its files. `--quant bf16` rules out any quality change from quantization; `--quant bf16,fp8` allows 8-bit but not 4-bit. |
-| `--kv-quant on\|off` | `on` | A quantized KV cache: fp8 on vLLM (Hopper, or Ampere and Ada with FlashInfer), fp8_e5m2 on SGLang, q8_0 and q4_0 on llama.cpp. The memory planner sizes each cache type exactly, and the stage also tries the next batch size up when only the smaller cache makes it fit. |
+| `--quant auto\|<list>` | `auto` | Which weight precisions calibration may choose. `auto` is every precision the backend supports except 4-bit AWQ and GPTQ checkpoints, which are opt-in: `--quant auto,awq,gptq` adds them, and `--quant gptq` allows only that. When they are allowed, PolyServe finds a pre-quantized repository of the same model on the Hub (the model's author first, then known quantizers), confirms from its `quantization_config` that it really is 4-bit, and sizes it from its files. They are opt-in because of quality: on Qwen2.5 3B and 7B they raised perplexity by 26–36%, where fp8 cost 1–2%, in exchange for 31–40% more throughput than fp8 at the same settings. `--quant bf16` rules out any quality change from quantization. llama.cpp's GGUF quantizations stay in `auto`, since they are the only formats that backend runs (Q4_K_M cost 10% against Q8_0). |
+| `--kv-quant on\|off` | `on` | A quantized KV cache: fp8 on vLLM (e4m3 on Ada and Hopper; on Ampere, e5m2 through FlashInfer when it is installed, because vLLM 0.11's default Triton attention cannot build fp8 KV kernels there), fp8_e5m2 on SGLang, q8_0 and q4_0 on llama.cpp. The memory planner sizes each cache type exactly, and the stage also tries the next batch size up when only the smaller cache makes it fit. |
 | `--prefix-cache on\|off` | `on` | Keeps vLLM's prefix caching and SGLang's radix cache on. On the shared-prefix workloads it also tries llama.cpp's `--cache-reuse` and `--kv-unified`. `off` disables the cache everywhere, for measuring what it is worth. |
-| `--speculative on\|off` | `on` | Speculative decoding: n-gram prompt lookup on vLLM, which needs no second model, and a small draft model of the same family (for example Qwen2.5-0.5B for the larger Qwen2.5 models, Llama-3.2-1B for Llama 3.x) on vLLM and on llama.cpp. It usually helps at low concurrency and hurts at high concurrency, where the GPU has no spare bandwidth for verification. |
-| `--layout single\|replicas\|tp\|auto` | `single` | Multi-GPU arrangement. `replicas` runs one engine per GPU behind a least-outstanding-requests load balancer; `tp` shards one engine across the GPUs with tensor parallelism (vLLM, SGLang). `auto` measures both against the single-GPU winner and keeps the best. Replicas and tensor parallel are compared through the same balancer and workload, and a replicas profile is served by the balancer on `:8000`. |
+| `--speculative on\|off` | `on` | Speculative decoding: n-gram lookup, which needs no second model, on vLLM and on recent llama.cpp builds (`--spec-type ngram-mod`), and a small draft model of the same family (for example Qwen2.5-0.5B for the larger Qwen2.5 models, Llama-3.2-1B for Llama 3.x) on llama.cpp, and on vLLM from 0.12 (vLLM 0.11 rejects a separate draft model). Measured on an A40, the two engines disagreed. vLLM's n-gram lookup, which matches only the prompt, lost at every concurrency from 1 to 64 and was never picked. llama.cpp's `ngram-mod`, which also matches text the model has already generated, won on `chat-system`: time per token fell from 16.3 to 6.8 ms. These synthetic answers probably repeat themselves more than real ones, so treat that gain as an upper bound. The Qwen2.5-0.5B draft model on llama.cpp lost 34% in a smoke test. |
+| `--layout single\|replicas\|tp\|auto` | `single` | Multi-GPU arrangement. `replicas` runs one engine per GPU behind a least-outstanding-requests load balancer; `tp` shards one engine across the GPUs with tensor parallelism (vLLM, SGLang). `auto` measures both against the single-GPU winner and keeps the best. Replicas and tensor parallel are compared through the same balancer and workload, and a replicas profile is served by the balancer on `:8000`. On GPUs without NVLink, tensor-parallel launches set `NCCL_P2P_DISABLE=1` and `--disable-custom-all-reduce`; without both, vLLM hung at start-up on a pair of A40s. Measured there: two replicas gave 1.74× one GPU on `high-concurrency`, and tensor parallel over PCIe was slower than one GPU. |
 
 A profile records any non-default options and is cached under its own name, so a `--quant bf16` profile is never served to a caller who asked for `auto`. `--layout` and `--phases` both use the extra GPUs, so only one of them can be set.
 
-To see whether 4-bit weights cost quality on your model, run `benchmarks/quality_check.py --quants bf16 fp8 awq gptq`. It loads the same checkpoints PolyServe would pick. **All five options are tested against fake engines and a fake Hub, and none has been measured on real hardware yet.**
+To see whether 4-bit weights cost quality on your model, run `benchmarks/quality_check.py --quants bf16 fp8 awq gptq`. It loads the same checkpoints PolyServe would pick. All five options have now run on real hardware, an A40 and a pair of A40s; [Re-measured on an A40](#re-measured-on-an-a40) has the numbers and what each strategy was worth.
 
 ---
 
@@ -185,6 +187,55 @@ To start serving without waiting for benchmarks, use `--skip-calibration`. This 
 ---
 
 ## Benchmarks
+
+> **Correction (September 2026): the RTX 3090 and CPU numbers in this section are inflated.** They were measured with a harness that sent the same prompts at every concurrency level of a trial. From the second level on, the engine's prompt cache (vLLM's prefix cache, llama.cpp's per-slot prompt cache) already held those prompts, so their prefill was nearly free and throughput read high. Re-measured with fresh prompts on an A40, one configuration dropped from 3638 to 1814 tok/s. Stock and PolyServe rows were inflated by the same mechanism, so the comparisons are skewed rather than invented, but neither the absolute numbers nor the gains below should be relied on. The harness now sends fresh prompts at every level (a workload's deliberately shared prefix is kept), and the re-measured results are in [Re-measured on an A40](#re-measured-on-an-a40). The RTX 3090 tables stay here, marked, until they are re-run.
+
+### Re-measured on an A40
+
+One A40 (48 GB, Ampere, cc 8.6) on RunPod Secure Cloud, with vLLM 0.11.0 plus FlashInfer 0.3.1 and llama.cpp built from source on 12 September 2026. The model is Qwen2.5-3B-Instruct unless stated, the objective is `balanced`, and every concurrency level gets fresh prompts. The multi-GPU rows come from a second pod with two A40s linked only by PCIe. Raw results, ablations and quality data are in [benchmarks/strategies/](benchmarks/strategies/), and [SUMMARY.md](benchmarks/strategies/SUMMARY.md) has every table in full (`benchmarks/summarize_strategies.py` regenerates it).
+
+**PolyServe's pick against stock settings**, measured minutes apart on the same card. Stock means `vllm serve <model>`, the same with `--quantization fp8`, and `llama-server -m <Q4_K_M>`:
+
+| workload | PolyServe pick | tok/s | vs stock vLLM | vs stock vLLM fp8 | vs stock llama.cpp |
+|---|---|---|---|---|---|
+| `generation` | vLLM GPTQ 4-bit, batch 256 | 1157 | **+111%** | +38% | +514% |
+| `chat-system` | vLLM GPTQ 4-bit, ctx 16k, batch 256 | 733 | **+69%** | +34% | +372% |
+| `chat` | vLLM GPTQ 4-bit, batch 64 | 783 | **+67%** | +36% | +402% |
+| `rag-shared` | vLLM AWQ 4-bit, ctx 32k, batch 64 | 480 | **+44%** | +27% | stock fails (4k context) |
+| `high-concurrency` | vLLM AWQ 4-bit, batch 256 | 1786 | +6% | +60% | stock misses SLO |
+| `rag` | vLLM bf16, ctx 32k | 106 | +1% | +134% | not measured |
+| `chat`, **Qwen2.5-7B** | vLLM GPTQ 4-bit, batch 256 | 495 | **+113%** | +144% | +413% |
+| `chat-system`, llama.cpp only | Q5_K_M, 8 slots, n-gram speculation | 455 | | | **+190%** |
+
+**Read this before the table: on vLLM the gain is 4-bit weights, and 4-bit is not free.** Where PolyServe picked a 4-bit checkpoint, swapping it for fp8 at the same settings cost 23–29% of the throughput. On the same text, those checkpoints raised perplexity by 26–32% on Qwen2.5-3B and 33–36% on Qwen2.5-7B, where fp8 costs 1–2% (see the quality table below). Locked to `--quant bf16,fp8`, PolyServe's gain over stock vLLM falls to +54% on `generation`, +27% on `chat` and +10% on `rag-shared`, and on `high-concurrency` it would serve bf16, matching stock. On Qwen2.5-7B `chat`, fp8 could not keep time to first token under the 500 ms ceiling above concurrency 4. Within that ceiling it measured below bf16, so there the 4-bit pick led fp8 by 144%, and locked to `bf16,fp8` PolyServe would serve bf16 and roughly match stock. Because of that quality cost, `--quant auto` no longer picks 4-bit checkpoints. The runs above allowed them (that is `--quant auto,awq,gptq` today), and the `bf16,fp8` numbers in this paragraph are what the default does now. The stock llama.cpp column is dominated by its one-slot default: most of that gap is concurrency, not tuning.
+
+**What each strategy was worth.** `benchmarks/ablate_strategies.py` flips one strategy of the pick at a time and measures both back to back:
+
+| strategy (vLLM) | `chat` | `chat-system` | `rag-shared` | `high-concurrency` | `generation` |
+|---|---|---|---|---|---|
+| 4-bit weights, against fp8 at the same settings | +33% | did not fit* | +31% | +33% | +40% |
+| prefix caching, on against off | | **+129%** | **+409%** | | |
+| fp8 KV cache | −3.7% | −2.1% | +0.5% | −4.5% | −3.8% |
+| n-gram speculative decoding | −6.9% | −19.7% | −9.4% | +0.1% | −12.1% |
+
+\* The ablation did not yet step the batch down when fp8 weights did not fit at the pick's batch; it does now.
+
+- **Prefix caching** is the largest single effect: on `rag-shared` it cut time to first token from 1377 to 386 ms. vLLM caches prefixes by default, so it is not a gain over stock; PolyServe keeps it on and now measures it.
+- **The fp8 KV cache and vLLM's n-gram speculation** never beat noise, and the tie-break (fewer strategies wins inside 2%) kept them out of every pick. On llama.cpp the result was different. Its `ngram-mod` speculation won on `chat-system` (time per token 16.3 → 6.8 ms), and `--kv-unified` measured 12.7% better still. The staged search never tried that combination, because it had tested prefix flags before speculation joined the leader. Tuning one dimension at a time has limits, and this is one of them.
+- **Two GPUs** (`high-concurrency`, two PCIe A40s): two replicas gave 3216 tok/s against 1845 on one GPU (+74%). Tensor parallelism gave 1560, slower than one GPU. `--layout auto` picked replicas. Disaggregated prefill/decode on `rag` lost to one engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), and `--phases auto` kept one engine.
+- **Qwen2.5-7B `chat`**: the 4-bit pick reached 495 tok/s against 232 for stock vLLM, with time per token 11.9 ms against 31.3. The fp8 KV cache cost 1.5% and n-gram speculation 40%, and neither was picked.
+- **Run-to-run variation** was 1–3% for vLLM and up to 10% for llama.cpp. The same llama.cpp pick measured 508, 455 and 427 tok/s across calibration, comparison and ablation.
+
+**Quality**, from `benchmarks/quality_check.py`, perplexity on the same public-domain book at every precision:
+
+| model | bf16 | fp8 | AWQ 4-bit | GPTQ 4-bit |
+|---|---|---|---|---|
+| Qwen2.5-3B-Instruct | 5.278 | +1.1% | +25.9% | +31.6% |
+| Qwen2.5-7B-Instruct | 2.290 | +1.6% | +32.9% | +36.4% |
+
+llama.cpp's own 4-bit fared better on the same text. Against Q8_0, Q6_K scored +0.9%, Q5_K_M +3.8% and Q4_K_M +10.1% (llama-perplexity, 3B). The book is almost certainly in the models' training data, so these relative losses partly measure lost memorisation and may overstate the damage on everyday prompts. A task-level benchmark would settle it, and none has been run.
+
+### RTX 3090, measured with the old harness
 
 All rows measured on one RTX 3090 (24 GB, cc 8.6) with vLLM 0.11.0, llama.cpp CUDA and Ollama 0.34 installed, driven by `polyserve compare`: PolyServe's calibrated pick and every stock default run against the same workload, minutes apart, on the same card. Telemetry via llmtrace (NVML at 100 ms). Raw results are in [benchmarks/results/](benchmarks/results/); `polyserve report` regenerates [benchmarks/RESULTS.md](benchmarks/RESULTS.md) and the throughput-vs-TTFT plot.
 
@@ -270,13 +321,14 @@ The predictor still has limits. The fitted bandwidth and compute efficiencies re
 
 These are gaps, not claims. In rough order of how much they would change the conclusions:
 
-1. **A task-level quality check.** Perplexity moved 1.1% at fp8, which is small, but perplexity is a weak proxy. GSM8K or a similar task-level benchmark at both precisions would say whether that 1.1% matters.
-2. **A second model size.** Everything here is 3B on GPU and 0.5B on CPU. A 7B or 8B model on 24 GB is where the memory planner actually binds, and where the search may contribute more than it does at 3B.
+1. **A task-level quality check.** Perplexity moved 1–2% at fp8 but 26–36% with the Hub's AWQ and GPTQ checkpoints, on a book the models have likely memorised. GSM8K or a similar task-level benchmark at each precision would say how much of that is real, and whether 4-bit checkpoints could return to `--quant auto`.
+2. **A second model size where memory binds.** Qwen2.5-7B ran on the A40, on `chat` only. The 4-bit pick beat stock vLLM by 113%, more than at 3B, but 48 GB is roomy for a 7B model. A 7B or 8B model on 24 GB, where the planner actually binds, and more workloads at that size are unmeasured.
 3. **Other accelerators.** A100, A30 and a pre-Turing card (GTX 1080) are untested, so the compute-capability branch in the selector has never run on real hardware. SGLang is implemented and has never been benchmarked at all.
-4. **Whether the search helps on GPU at all.** The isolation experiment says it does not, on one card with one model at three workloads. Finding out whether that holds on a card where memory is tight, or is an artifact of a 3B model on 24 GB, is the most interesting open question in this repository.
+4. **How much the search adds beyond picking a precision.** On the A40 the vLLM gain is almost entirely the choice of weights. Holding the weights fixed, the other knobs moved throughput by a few percent. The one-dimension-at-a-time search also missed a combination on llama.cpp that measured 12.7% better. A search over pairs of strategies, and a card where memory is tight, are where that could change.
 5. **Energy tuning on real hardware.** `--power` has only run against a simulated NVML. It needs root on the host, so it has to be measured on a machine you control. Whether the energy-optimal point sits near 70% of full power for these workloads, and whether it differs between prefill-heavy `rag` and decode-heavy `generation`, is still a prediction.
-6. **Disaggregated prefill and decode on real GPUs.** `--phases disaggregated` has only run against fake engines. Whether moving the KV cache between two GPUs on one node beats a single engine at 3B, where the unified result already has memory headroom, is open, and a loss there would not be surprising: the published gains come from larger models and heavier prefill contention.
-7. **The five search options on real hardware.** 4-bit weights, a quantized KV cache, prefix caching, speculative decoding and the replicas and tensor-parallel layouts have all run only against fake engines. The open questions: what 4-bit costs in perplexity against fp8's 1.1%; whether an fp8 KV cache helps a 3B model, which already has KV headroom on 24 GB; how much prefix caching cuts TTFT on `rag-shared`; at what concurrency speculative decoding turns from a gain into a loss; and whether tensor parallel ever beats replicas for a model that fits on one GPU.
+6. **Disaggregated prefill and decode at a scale where it could pay.** On two PCIe-linked A40s with a 3B model it ran end to end but lost to one engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), and one of the two pairs tried failed a quarter of its requests with KV blocks the decode engine never pulled. Published gains come from larger models, NVLink or RDMA between the engines, and heavier prefill contention, none of which was available here.
+7. **Speculative decoding on real traffic.** It was measured only on synthetic prompts. vLLM's prompt-only n-gram lookup cannot win there, and llama.cpp's `ngram-mod` may win for the wrong reason, because the synthetic answers repeat themselves. An extraction or code-edit workload, real chat transcripts, and a draft model on vLLM 0.12 or newer are unmeasured. The fp8 KV cache has only tied or lost so far, on Ampere, where it runs through FlashInfer as e5m2; on Hopper, with native fp8 attention, it may behave differently.
+8. **vLLM's sampler in the memory planner.** At batch 512 and 95% memory utilization vLLM ran out of memory warming up its sampler. The planner does not model that buffer, so the KV stage's step up to batch 512 can cost a failed launch.
 
 ## Backend interface
 

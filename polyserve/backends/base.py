@@ -114,7 +114,7 @@ class Process:
         if self.alive():
             try:
                 if sys.platform != "win32":
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                    os.killpg(self._proc.pid, signal.SIGTERM)  # own session: group id == server pid
                 else:
                     self._proc.terminate()
             except Exception:
@@ -124,12 +124,20 @@ class Process:
             except subprocess.TimeoutExpired:
                 try:
                     if sys.platform != "win32":
-                        os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                        os.killpg(self._proc.pid, signal.SIGKILL)
                     else:
                         self._proc.kill()
                 except Exception:
                     pass
                 self._proc.wait(timeout=10)
+        if sys.platform != "win32":
+            # The server can be gone while its children are not: a vLLM API server that died leaves
+            # VLLM::EngineCore holding the GPU, and every later trial then sees less memory. The
+            # children share the server's process group, so reap whatever is left of it.
+            try:
+                os.killpg(self._proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
         if self._log_fh:
             self._log_fh.close()
             self._log_fh = None

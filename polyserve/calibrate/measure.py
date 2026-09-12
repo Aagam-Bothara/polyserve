@@ -12,11 +12,12 @@ import importlib.util
 import json
 import logging
 import os
+import queue
 import statistics
 import threading
 import time
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, replace
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -364,6 +365,8 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
         duration_s=wall_s,
         output_tokens=sum(o.tokens for o in ok),
     )
+    # A few distinct errors, so "12/48 requests failed" says why.
+    m.errors = list(dict.fromkeys((o.error or "")[:200] for o in outcomes if not o.ok and o.error))[:3]
     if not ok:
         return m
     m.token_count_source = worst_source(o.token_source for o in ok)
@@ -376,6 +379,77 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
     return m
 
 
+def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Workload:
+    """The prompts for concurrency level k: fresh ones after the first level.
+
+    Replaying the first level's prompts lets the engine's prefix cache serve every later level's
+    prefill almost for free: on an A40 one configuration read 3638 tok/s with replayed prompts and
+    1814 with fresh ones. A workload's shared prefix is kept; caching that is the point.
+    """
+    if k == 0:
+        return workload
+    level = replace(workload, seed=workload.seed + 7_919 * k, prompts=[], fitted=False,
+                    prefix_text=workload.prefix_text, prefix_fixed=True)
+    if counter.available:
+        level.fit_prompts(counter)
+    return level
+
+
+def _client_main(index: int, base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int,
+                 timeout: float, ready: Any, go: Any, out: Any) -> None:
+    """One load-generator process (see _drive_clients). Module level so it pickles under spawn."""
+    ready.put(index)
+    go.wait()
+    out.put((index, asyncio.run(_drive(base_url, hooks, workload, concurrency, timeout))))
+
+
+def _drive_clients(base_url: str, hooks: LlmtraceHooks, workload: Workload, concurrency: int, timeout: float,
+                   clients: int) -> Tuple[List[RequestOutcome], float]:
+    """Drive one level from several processes, with the prompts and the concurrency split between them.
+
+    One Python client tops out near 3000 streamed tokens/s (through the replica balancer on two A40s:
+    2954 tok/s from one client, 3541 from four). The clock starts once every process is up, so
+    process start-up is not measured. A process that dies counts its requests as failed.
+    """
+    import multiprocessing as mp
+
+    shards = [s for s in (workload.prompts[i::clients] for i in range(clients)) if s]
+    per = max(1, -(-concurrency // len(shards)))
+    ctx = mp.get_context("spawn")
+    ready, out, go = ctx.Queue(), ctx.Queue(), ctx.Event()
+    procs = [ctx.Process(target=_client_main, daemon=True,
+                         args=(i, base_url, hooks, replace(workload, prompts=s, n_prompts=len(s), fitted=True),
+                               per, timeout, ready, go, out))
+             for i, s in enumerate(shards)]
+    for p in procs:
+        p.start()
+    started, deadline = 0, time.monotonic() + 180
+    while started < len(procs) and time.monotonic() < deadline:
+        try:
+            ready.get(timeout=1)
+            started += 1
+        except queue.Empty:
+            if not any(p.is_alive() for p in procs):
+                break
+    t0 = time.perf_counter()
+    go.set()
+    results: Dict[int, List[RequestOutcome]] = {}
+    while len(results) < len(procs):
+        try:
+            i, outcomes = out.get(timeout=5)
+            results[i] = outcomes
+        except queue.Empty:
+            if not any(p.is_alive() for p in procs) and out.empty():
+                break
+    wall = time.perf_counter() - t0
+    for p in procs:
+        p.join(timeout=10)
+    merged: List[RequestOutcome] = []
+    for i, s in enumerate(shards):
+        merged += results.get(i) or [RequestOutcome(ok=False, error="load-generator process died")] * len(s)
+    return merged, wall
+
+
 def run_trial(
     base_url: str,
     hooks: LlmtraceHooks,
@@ -384,8 +458,12 @@ def run_trial(
     request_timeout: float = 120.0,
     warmup: bool = True,
     counter: Optional[TokenCounter] = None,
+    clients: int = 1,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
+
+    Every level gets fresh prompts (see _level_workload). `clients` > 1 drives each level from that
+    many processes, for layouts whose combined throughput a single Python client cannot keep up with.
 
     Summary rule: tok/s and TTFT/TPOT come from the concurrency level with the highest
     throughput (that is the load the server would actually be run at); energy per token
@@ -417,11 +495,15 @@ def run_trial(
     clocks: List[float] = []
     source = "none"
 
-    for c in workload.concurrencies:
+    for k, c in enumerate(workload.concurrencies):
+        level = _level_workload(workload, k, counter)
         with Telemetry(hooks, pid=pid) as tel:
-            t0 = time.perf_counter()
-            outcomes = asyncio.run(_drive(base_url, hooks, workload, c, request_timeout, counter))
-            wall = time.perf_counter() - t0
+            if clients > 1:
+                outcomes, wall = _drive_clients(base_url, hooks, level, c, request_timeout, clients)
+            else:
+                t0 = time.perf_counter()
+                outcomes = asyncio.run(_drive(base_url, hooks, level, c, request_timeout, counter))
+                wall = time.perf_counter() - t0
         m = _metrics_from(outcomes, wall, c)
         s = tel.summary
         source = s.source if s.source != "none" else source

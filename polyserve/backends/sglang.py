@@ -12,6 +12,7 @@ from polyserve.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from polyserve.hardware import nvlink_between
 from polyserve.quantized import INT4_METHODS, hf_weight_options
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,14 @@ class SglangBackend(BaseBackend):
         if model.spec.revision and cfg.quant not in INT4_METHODS:
             args += ["--revision", model.spec.revision]
         args += render_extra(cfg.extra)
-        return LaunchSpec(args=args)
+        env = {}
+        # PCIe-only GPUs: peer-to-peer can hang at start-up inside containers. Measured on a pair of
+        # A40s: NCCL's P2P path hangs at init, and with only that disabled the engine's custom
+        # all-reduce (CUDA IPC, also P2P) hangs next. With both off it starts in under a minute.
+        if cfg.tp > 1 and nvlink_between(list(range(cfg.tp))) is False:
+            env["NCCL_P2P_DISABLE"] = "1"
+            args += ["--disable-custom-all-reduce"]
+        return LaunchSpec(args=args, env=env)
 
     PREFILL_BUDGETS = (2048, 8192, 16384)
 
