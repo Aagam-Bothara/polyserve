@@ -6,6 +6,9 @@
                         decode knob.
 3b. prefill           - on the leading config, sweep the prefill knob: the chunked-prefill token
                         budget (vLLM, SGLang) or the micro-batch (llama.cpp). Default on.
+3c. kv                - quantized KV caches, including the batch step a smaller cache admits.
+3d. prefix            - prefix-cache settings, when the workload's prompts share a prefix.
+3e. spec              - speculative decoding (n-gram lookup, a small draft model).
 4. power (optional)   - on the leading config, sweep GPU power caps and/or locked SM clocks
                         through NVML without relaunching, and keep the setting that saves energy.
 
@@ -14,7 +17,9 @@ The winner is the objective's constrained argmax over *every* successful trial, 
 
 from __future__ import annotations
 
+import dataclasses
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -107,9 +112,12 @@ class SubprocessTrialRunner:
         port = free_port()
         log_path = None
         if self.log_dir:
-            safe = cfg.key().replace("/", "_")
+            safe = re.sub(r"[^A-Za-z0-9._=+-]+", "_", cfg.key())
             log_path = self.log_dir / f"{int(time.time())}_{safe}.log"
         hooks = backend.workload_hooks(self.hw, model)
+        if cfg.tp > 1 and hooks.gpu_ids:  # one engine over several GPUs: measure all of them
+            gpus = [g.index for g in self.hw.gpus if g.vendor == "nvidia"][: cfg.tp]
+            hooks = dataclasses.replace(hooks, gpu_ids=gpus or hooks.gpu_ids)
         observation = MemoryObservation(predicted=self._predict(cfg, backend, model))
         baseline_mb = device_used_mb(hooks.gpu_ids)
         proc = None
@@ -167,7 +175,7 @@ class SubprocessTrialRunner:
         port = free_port()
         log_path = None
         if self.log_dir:
-            log_path = self.log_dir / f"{int(time.time())}_{base.key().replace('/', '_')}_power.log"
+            log_path = self.log_dir / f"{int(time.time())}_{re.sub(r'[^A-Za-z0-9._=+-]+', '_', base.key())}_power.log"
         hooks = backend.workload_hooks(self.hw, model)
         results: List[TrialResult] = []
         proc = None
@@ -263,6 +271,8 @@ class StagedSearch:
     power_points: List[PowerSetting] = field(default_factory=list)
     # Stage 3b: configs differing from the leader only in the prefill knob. None = stage off.
     prefill_variants: Optional[Callable[[Config], List[Config]]] = None
+    # Stages 3c-3e: (name, variants of the current leader), run in order after the prefill stage.
+    variant_stages: List[Tuple[str, Callable[[Config], List[Config]]]] = field(default_factory=list)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
@@ -416,6 +426,19 @@ class StagedSearch:
         for v in variants:
             self._run(v, "prefill")
 
+    def stage_variants(self, name: str, fn: Callable[[Config], List[Config]]) -> None:
+        """Measure the current leader's variants along one dimension; the objective keeps the best."""
+        leader, _ = pick(self.results, self.objective, self.constraints)
+        if leader is None:
+            return
+        try:
+            variants = fn(leader.config)
+        except Exception as exc:
+            logger.warning("no %s variants for %s: %s", name, leader.config.key(), exc)
+            return
+        for v in variants:
+            self._run(v, name)
+
     def stage_power(self, base: Config) -> None:
         """Measure the leading config under each power setting and let the objective choose."""
         settings = list(self.power_points)
@@ -469,6 +492,8 @@ class StagedSearch:
             leader, _ = pick(self.results, self.objective, self.constraints)
             if leader is not None:
                 self.stage_prefill(leader.config)
+        for name, fn in self.variant_stages:
+            self.stage_variants(name, fn)
         if self.power_points:
             leader, _ = pick(self.results, self.objective, self.constraints)
             if leader is not None:

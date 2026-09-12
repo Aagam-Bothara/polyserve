@@ -11,7 +11,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, runtime_checkable
+from typing import Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 
@@ -162,6 +162,17 @@ def ctx_grid(max_pos: int, min_ctx: int = 0) -> List[int]:
     return grid[:CTX_GRID_WIDTH]
 
 
+def render_extra(extra: Dict[str, object], skip: Tuple[str, ...] = ()) -> List[str]:
+    """Extra launch flags. `True` renders as a bare flag; `False` and None are dropped."""
+    out: List[str] = []
+    for k, v in extra.items():
+        if k in skip or v is None or v is False:
+            continue
+        flag = f"--{k.replace('_', '-')}"
+        out += [flag] if v is True else [flag, str(v)]
+    return out
+
+
 def free_port(preferred: Optional[int] = None) -> int:
     if preferred:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -251,6 +262,36 @@ class BaseBackend:
                            kv_transfer_config: dict, gpu_index: int, side_channel_port: int) -> LaunchSpec:
         """Launch one engine of a disaggregated prefill/decode pair."""
         raise NotImplementedError(f"{self.name} does not support disaggregated prefill/decode")
+
+    # ---- optional search dimensions (default: this backend offers none)
+
+    supports_tp: bool = False
+
+    def supported_quants(self, hw: HardwareDescriptor) -> List[str]:
+        """Every weight precision this backend could run on `hw` (what --quant filters)."""
+        return []
+
+    def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
+        """Quantized KV-cache types worth trying on `hw`."""
+        return []
+
+    def batch_ladder(self) -> Tuple[int, ...]:
+        """Batch sizes, smallest first, that a smaller KV cache may let the search step up to."""
+        return ()
+
+    def prefix_variants(self, cfg: Config) -> List[Config]:
+        """Prefix-cache settings to try when the workload's prompts share a prefix."""
+        return []
+
+    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+        """Speculative-decoding settings to try."""
+        return []
+
+    def replica_launch_spec(self, cfg: Config, model: PreparedModel, port: int, gpu_index: int) -> LaunchSpec:
+        """One full engine pinned to one GPU, for the replicas layout."""
+        spec = self.launch_spec(cfg, model, port)
+        spec.env = {**spec.env, "CUDA_VISIBLE_DEVICES": str(gpu_index)}
+        return spec
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         raise NotImplementedError

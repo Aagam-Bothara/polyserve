@@ -52,11 +52,17 @@ def _trial_table(results: List[TrialResult], winner: Optional[str] = None) -> Ta
     for r in results:
         m = r.metrics
         status = "ok" if r.ok else (r.error or "failed").splitlines()[0][:40]
-        key = r.disagg.key() if r.disagg is not None else r.config.key()
+        key = _trial_key(r)
         style = "bold green" if winner and key == winner else None
         t.add_row(r.stage, key, _fmt(m.tok_s), _fmt(m.ttft_ms, 0), _fmt(m.tpot_ms, 1), _fmt(m.peak_mem_mb, 0),
                   _fmt(m.power_w, 0), _fmt(m.sm_clock_mhz, 0), _fmt(m.joules_per_token, 3), status, style=style)
     return t
+
+
+def _trial_key(r: TrialResult) -> str:
+    if r.disagg is not None:
+        return r.disagg.key()
+    return f"{r.config.key()} x{r.replicas}" if r.replicas > 1 else r.config.key()
 
 
 def _print_profile(p: Profile) -> None:
@@ -67,6 +73,12 @@ def _print_profile(p: Profile) -> None:
         console.print(f"[bold]phases[/]:  disaggregated over {p.disagg.connector}; "
                       f"prefill GPU {p.disagg.prefill_gpu}: {p.disagg.prefill.key()}")
         console.print(f"          decode GPU {p.disagg.decode_gpu}: {p.disagg.decode.key()}")
+    if p.replicas > 1:
+        console.print(f"[bold]layout[/]:  {p.replicas} replicas, one per GPU, behind a load balancer")
+    elif p.config.tp > 1:
+        console.print(f"[bold]layout[/]:  tensor parallel across {p.config.tp} GPUs")
+    if p.options:
+        console.print(f"[bold]options[/]: {', '.join(f'{k}={v}' for k, v in sorted(p.options.items()))}")
     console.print(f"[bold]launch[/]:  {' '.join(p.launch_args)}")
     if p.launch_env:
         console.print(f"[bold]env[/]:     {' '.join(f'{k}={v}' for k, v in p.launch_env.items())}")
@@ -75,7 +87,9 @@ def _print_profile(p: Profile) -> None:
 
 
 def _winner_key(p: Profile) -> str:
-    return p.disagg.key() if p.disagg is not None else p.config.key()
+    if p.disagg is not None:
+        return p.disagg.key()
+    return f"{p.config.key()} x{p.replicas}" if p.replicas > 1 else p.config.key()
 
 
 def _progress(stage: str, cfg, res) -> None:
@@ -150,6 +164,55 @@ PHASES_OPT = typer.Option(
          "keep the better.",
 )
 KV_OPT = typer.Option("nixl", "--kv-connector", help="KV-cache transfer connector for --phases disaggregated/auto")
+
+
+def _on_off(value: str) -> str:
+    if value not in ("on", "off"):
+        raise typer.BadParameter("expected on or off")
+    return value
+
+
+def _layout(value: str) -> str:
+    from polyserve.layout import LAYOUTS
+
+    if value not in LAYOUTS:
+        raise typer.BadParameter(f"layout must be one of {', '.join(LAYOUTS)}")
+    return value
+
+
+def _quant_list(value: str) -> str:
+    from polyserve.gguf import GGUF_QUANTS
+
+    known = {"bf16", "fp16", "fp8", "awq", "gptq", *GGUF_QUANTS}
+    if value != "auto":
+        bad = [q for q in value.split(",") if q.strip() not in known]
+        if bad:
+            raise typer.BadParameter(f"unknown precision {', '.join(bad)}; known: auto, {', '.join(sorted(known))}")
+    return value
+
+
+def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str):
+    from polyserve.pipeline import SearchOptions
+
+    return SearchOptions(
+        quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
+        kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
+    )
+
+
+QUANT_OPT = typer.Option("auto", "--quant", callback=_quant_list,
+                         help="Weight precisions calibration may choose: auto, or a list such as bf16 or bf16,fp8 "
+                              "(also fp16, awq, gptq, Q4_K_M, Q5_K_M, Q6_K, Q8_0). Lock to bf16 to rule out any "
+                              "quality change from quantization.")
+KVQ_OPT = typer.Option("on", "--kv-quant", callback=_on_off,
+                       help="Try quantized KV caches (fp8 on vLLM and SGLang, q8_0 and q4_0 on llama.cpp)")
+SPEC_OPT = typer.Option("on", "--speculative", callback=_on_off,
+                        help="Try speculative decoding (n-gram prompt lookup, a small draft model)")
+PREFIX_OPT = typer.Option("on", "--prefix-cache", callback=_on_off,
+                          help="Keep prefix caching on and tune it for workloads whose prompts share a prefix")
+LAYOUT_OPT = typer.Option("single", "--layout", callback=_layout,
+                          help="Multi-GPU layout: single (default), replicas (one engine per GPU behind a load "
+                               "balancer), tp (tensor parallel), auto (measure both, keep the better)")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 
 
@@ -173,10 +236,11 @@ def workloads() -> None:
     from polyserve.calibrate.workload import workload_table
 
     t = Table(title="Workload presets (latency ceilings in ms)")
-    for col in ("name", "prompts", "prefill", "decode", "concurrency", "TTFT", "TPOT"):
+    for col in ("name", "prefill", "shared", "decode", "concurrency", "TTFT", "TPOT"):
         t.add_column(col, justify="right" if col != "name" else "left")
     for w in workload_table():
-        t.add_row(str(w["name"]), str(w["n_prompts"]), str(w["prefill_tokens"]), str(w["decode_tokens"]),
+        t.add_row(str(w["name"]), str(w["prefill_tokens"]), str(w.get("shared_prefix_tokens") or "-"),
+                  str(w["decode_tokens"]),
                   "/".join(str(c) for c in w["concurrencies"]), f"{w['ttft_ceiling_ms']:.0f}",
                   f"{w['tpot_ceiling_ms']:.0f}" if w.get("tpot_ceiling_ms") else "-")
     console.print(t)
@@ -268,6 +332,11 @@ def bench(
     tpot_ceiling: Optional[float] = TPOT_OPT,
     phases: str = PHASES_OPT,
     kv_connector: str = KV_OPT,
+    quant: str = QUANT_OPT,
+    kv_quant: str = KVQ_OPT,
+    speculative: str = SPEC_OPT,
+    prefix_cache: str = PREFIX_OPT,
+    layout: str = LAYOUT_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from polyserve import cache as profile_cache
@@ -281,18 +350,24 @@ def bench(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache)
+    result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling)
     profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=_progress,
-                        power_mode=power)
+                        power_mode=power, options=opts)
     if phases != "unified":
         from polyserve.disagg import calibrate_disaggregated
 
         profile = calibrate_disaggregated(hw, spec, objective, profile, reg, workload=wl, constraints=cons,
                                           phases=phases, connector=kv_connector, progress=_progress,
                                           power_mode=power)
+    if layout != "single":
+        from polyserve.layout import calibrate_layout
+
+        profile = calibrate_layout(hw, objective, profile, reg, layout, workload=wl, constraints=cons,
+                                   progress=_progress)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
     if save:
@@ -311,6 +386,11 @@ def recalibrate(
     tpot_ceiling: Optional[float] = TPOT_OPT,
     phases: str = PHASES_OPT,
     kv_connector: str = KV_OPT,
+    quant: str = QUANT_OPT,
+    kv_quant: str = KVQ_OPT,
+    speculative: str = SPEC_OPT,
+    prefix_cache: str = PREFIX_OPT,
+    layout: str = LAYOUT_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from polyserve.pipeline import resolve_profile
@@ -319,7 +399,8 @@ def recalibrate(
     profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
-                              power_mode=power, phases=phases, kv_connector=kv_connector)
+                              power_mode=power, phases=phases, kv_connector=kv_connector,
+                              options=_opts(quant, kv_quant, speculative, prefix_cache), layout=layout)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
 
@@ -339,6 +420,11 @@ def compare(
     tpot_ceiling: Optional[float] = TPOT_OPT,
     phases: str = PHASES_OPT,
     kv_connector: str = KV_OPT,
+    quant: str = QUANT_OPT,
+    kv_quant: str = KVQ_OPT,
+    speculative: str = SPEC_OPT,
+    prefix_cache: str = PREFIX_OPT,
+    layout: str = LAYOUT_OPT,
 ) -> None:
     """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from polyserve.bench import compare as _compare, to_markdown
@@ -352,10 +438,12 @@ def compare(
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
-                              power_mode=power, phases=phases, kv_connector=kv_connector)
+                              power_mode=power, phases=phases, kv_connector=kv_connector,
+                              options=_opts(quant, kv_quant, speculative, prefix_cache), layout=layout)
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
-    planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl)
+    planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -530,6 +618,11 @@ def serve(
     tpot_ceiling: Optional[float] = TPOT_OPT,
     phases: str = PHASES_OPT,
     kv_connector: str = KV_OPT,
+    quant: str = QUANT_OPT,
+    kv_quant: str = KVQ_OPT,
+    speculative: str = SPEC_OPT,
+    prefix_cache: str = PREFIX_OPT,
+    layout: str = LAYOUT_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -544,7 +637,8 @@ def serve(
     profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
-                              power_mode=power, phases=phases, kv_connector=kv_connector)
+                              power_mode=power, phases=phases, kv_connector=kv_connector,
+                              options=_opts(quant, kv_quant, speculative, prefix_cache), layout=layout)
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")
@@ -561,6 +655,15 @@ def serve(
         sup.start()
         app_ = create_pd_app(sup.prefill_url, sup.decode_url, profile=profile, status_fn=sup.status)
         upstream = f"prefill {sup.prefill_url}, decode {sup.decode_url}"
+    elif profile.replicas > 1:
+        from polyserve.layout import ReplicaSupervisor, create_lb_app
+
+        gpus = [g.index for g in profile.hardware.gpus if g.vendor == "nvidia"][: profile.replicas]
+        sup = ReplicaSupervisor(be, profile.config, profile.prepared, gpus, log_dir=profile_cache.logs_dir() / spec.safe_id)
+        err.print(f"[dim]starting {len(gpus)} {profile.backend} replicas on GPUs {gpus} ...[/]")
+        sup.start()
+        app_ = create_lb_app(sup.urls, profile=profile, status_fn=sup.status)
+        upstream = ", ".join(sup.urls)
     else:
         sup = Supervisor(be, profile.config, profile.prepared,
                          log_path=profile_cache.logs_dir() / spec.safe_id / "serve.log",

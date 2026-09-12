@@ -128,6 +128,8 @@ def observations_from_trials(trials: Iterable[TrialResult], hardware_hash: str) 
         m = t.memory.measured
         if p.weights <= 0:
             continue  # reference runtimes we do not plan for (e.g. Ollama picks its own quant)
+        if t.config.tp > 1:
+            continue  # sharded across GPUs: a per-GPU prediction is not comparable with a summed peak
         out.append(
             Observation(
                 backend=t.config.backend,

@@ -5,7 +5,9 @@ Throughput comparisons between precisions are not like-for-like unless quality h
 measures token-level perplexity on the same held-out text at each precision, using the same
 engine (vLLM) and the same sequences, and reports the relative change.
 
-    python benchmarks/quality_check.py --model Qwen/Qwen2.5-3B-Instruct --quants bf16 fp8
+    python benchmarks/quality_check.py --model Qwen/Qwen2.5-3B-Instruct --quants bf16 fp8 awq gptq
+
+`awq` and `gptq` load the pre-quantized 4-bit checkpoint PolyServe would pick from the Hub.
 
 Perplexity is a weak proxy for task quality, but it is cheap, deterministic and sensitive to the
 kind of degradation weight-only quantisation causes. A gap under ~1% is normal for fp8 weights.
@@ -54,7 +56,9 @@ def perplexity(model: str, quant: Optional[str], seqs: List[List[int]], max_len:
 
     kwargs = dict(model=model, max_model_len=max_len, gpu_memory_utilization=0.85,
                   enforce_eager=True, disable_log_stats=True)
-    if quant and quant != "bf16":
+    if quant in ("awq", "gptq"):
+        kwargs["dtype"] = "auto"  # the checkpoint's quantization_config chooses the kernel
+    elif quant and quant != "bf16":
         kwargs["quantization"] = quant
     else:
         kwargs["dtype"] = "bfloat16"
@@ -107,16 +111,27 @@ def main() -> int:
     print(f"{len(seqs)} sequences x {args.seq_len} tokens = {len(seqs) * args.seq_len} tokens", flush=True)
 
     results = {}
+    repos = {}
     for q in args.quants:
-        print(f"loading {args.model} at {q} ...", flush=True)
-        ppl = perplexity(args.model, q, seqs, args.seq_len + 8)
+        target = args.model
+        if q in ("awq", "gptq"):
+            from polyserve.models import ModelSpec
+            from polyserve.quantized import find_int4_repos
+
+            repo = find_int4_repos(ModelSpec(hf_id=args.model), methods=[q]).get(q)
+            if repo is None:
+                print(f"{q}: no pre-quantized 4-bit checkpoint of {args.model} on the Hub; skipped", flush=True)
+                continue
+            target = repos[q] = repo.repo_id
+        print(f"loading {target} at {q} ...", flush=True)
+        ppl = perplexity(target, q, seqs, args.seq_len + 8)
         results[q] = ppl
         print(f"{q}: perplexity {ppl:.4f}", flush=True)
 
     base = args.quants[0]
     out = {
         "model": args.model, "sequences": len(seqs), "seq_len": args.seq_len,
-        "corpus": TEXT_URL, "perplexity": results,
+        "corpus": TEXT_URL, "perplexity": results, "checkpoints": repos,
         "delta_pct": {q: (results[q] - results[base]) / results[base] * 100 for q in results},
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)

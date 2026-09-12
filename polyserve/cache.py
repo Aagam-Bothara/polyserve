@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Iterator, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from polyserve.hardware import hardware_hash
 from polyserve.models import HardwareDescriptor, ModelSpec, Profile
@@ -26,18 +26,20 @@ def logs_dir() -> Path:
 
 
 def profile_path(hw_hash: str, model: ModelSpec, objective: str, workload: str = "default",
-                 power: str = "off", phases: str = "unified") -> Path:
+                 power: str = "off", phases: str = "unified", options: Optional[Dict[str, str]] = None) -> Path:
     name = objective if workload == "default" else f"{objective}-{workload}"
     if power != "off":
         name += f"-power-{power}"
     if phases != "unified":
         name += f"-phases-{phases}"
+    for k in sorted(options or {}):
+        name += f"-{k}-{str(options[k]).replace('/', '_')}"
     return profiles_dir() / hw_hash / model.safe_id / f"{name}.json"
 
 
 def save(profile: Profile) -> Path:
     path = profile_path(profile.hardware_hash, ModelSpec(hf_id=profile.model_id), profile.objective, profile.workload,
-                        profile.power_mode, profile.phases)
+                        profile.power_mode, profile.phases, profile.options)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
@@ -47,9 +49,9 @@ def save(profile: Profile) -> Path:
 
 
 def load(hw: HardwareDescriptor, model: ModelSpec, objective: str, workload: str = "default",
-         power: str = "off", phases: str = "unified") -> Optional[Profile]:
+         power: str = "off", phases: str = "unified", options: Optional[Dict[str, str]] = None) -> Optional[Profile]:
     """Return a cached profile if present and still valid for this hardware + backend version."""
-    path = profile_path(hardware_hash(hw), model, objective, workload, power, phases)
+    path = profile_path(hardware_hash(hw), model, objective, workload, power, phases, options)
     if not path.exists():
         return None
     try:

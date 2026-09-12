@@ -13,7 +13,8 @@ from polyserve.pipeline import default_profile, prepare_and_plan, select
 
 
 def test_presets_are_sane():
-    assert set(WORKLOAD_NAMES) == {"default", "chat", "long-context", "generation", "high-concurrency", "rag"}
+    assert set(WORKLOAD_NAMES) == {"default", "chat", "long-context", "generation", "high-concurrency", "rag",
+                                   "chat-system", "rag-shared"}
     for name in WORKLOAD_NAMES:
         w = get_workload(name)
         assert w.name == name and len(w.prompts) == w.n_prompts

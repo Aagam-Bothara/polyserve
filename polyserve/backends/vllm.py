@@ -6,12 +6,14 @@ import importlib.util
 import json
 import logging
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid
+from polyserve import speculative
+from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from polyserve.quantized import INT4_METHODS, hf_weight_options
 
 logger = logging.getLogger(__name__)
 
@@ -69,15 +71,40 @@ class VllmBackend(BaseBackend):
         out = ["bf16" if cc >= (8, 0) else "fp16"]
         if cc >= (8, 0):  # fp8 online weight quantisation (Marlin on Ampere, native on Ada/Hopper)
             out.append("fp8")
+        if cc >= (7, 5):  # pre-quantized 4-bit checkpoints: Marlin kernels on Ampere+, plain AWQ/GPTQ on Turing
+            out += list(INT4_METHODS)
         return out
+
+    def supported_quants(self, hw: HardwareDescriptor) -> List[str]:
+        return self.precisions(hw)
 
     def prepare(self, model: ModelSpec, hw: HardwareDescriptor, quants: Optional[List[str]] = None) -> PreparedModel:
         arch = load_arch(model)
-        params = arch.num_params or 0
-        weights = {}
-        for p in quants or self.precisions(hw):
-            weights[p] = params * (1 if p == "fp8" else dtype_bytes(p))
-        return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, weights_bytes=weights)
+        weights, paths = hf_weight_options(model, arch.num_params or 0, list(quants or self.precisions(hw)),
+                                           lambda p: 1 if p == "fp8" else dtype_bytes(p))
+        return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
+                             weights_bytes=weights)
+
+    # ---- optional search dimensions
+
+    supports_tp = True
+
+    def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
+        cc = hw.gpu.cc if hw.gpu else (0, 0)
+        # An fp8 KV cache needs FlashAttention 3 (Hopper) or FlashInfer (Ampere, Ada).
+        if cc >= (9, 0) or (cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None):
+            return ["fp8"]
+        return []
+
+    def batch_ladder(self) -> Tuple[int, ...]:
+        return (16, 64, 256, 512)
+
+    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+        specs = [speculative.ngram()]
+        draft = speculative.draft_for(model.spec.hf_id)
+        if draft:
+            specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
+        return [cfg.model_copy(update={"spec_decode": s}) for s in specs if s != cfg.spec_decode]
 
     def materialize(self, model: PreparedModel, quants: List[str]) -> PreparedModel:
         return model  # vLLM pulls HF weights itself at launch
@@ -115,7 +142,9 @@ class VllmBackend(BaseBackend):
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         args = [
             sys.executable, "-m", self.server_module,
-            "--model", model.hf_path or model.spec.hf_id,
+            "--model", model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id,
+            # A stable name even when a 4-bit checkpoint repository is what gets loaded.
+            "--served-model-name", model.spec.hf_id,
             "--host", "127.0.0.1",
             "--port", str(port),
             "--max-model-len", str(cfg.ctx),
@@ -129,12 +158,18 @@ class VllmBackend(BaseBackend):
             args += ["--quantization", "fp8"]
         elif cfg.quant in ("bf16", "fp16"):
             args += ["--dtype", "bfloat16" if cfg.quant == "bf16" else "float16"]
+        # awq / gptq: the checkpoint's quantization_config selects the kernel; no flag needed.
         if cfg.kv_dtype != "auto":
             args += ["--kv-cache-dtype", cfg.kv_dtype]
-        if model.spec.revision:
+        if cfg.prefix_cache is not None:
+            args += ["--enable-prefix-caching" if cfg.prefix_cache else "--no-enable-prefix-caching"]
+        if cfg.spec_decode:
+            args += ["--speculative-config", json.dumps(speculative.vllm_config(cfg.spec_decode))]
+        if cfg.tp > 1:
+            args += ["--tensor-parallel-size", str(cfg.tp)]
+        if model.spec.revision and cfg.quant not in INT4_METHODS:
             args += ["--revision", model.spec.revision]
-        for k, v in cfg.extra.items():
-            args += [f"--{k.replace('_', '-')}", str(v)]
+        args += render_extra(cfg.extra)
         return LaunchSpec(args=args)
 
     # Chunked-prefill token budgets to try. Small budgets interleave prefill with decode and protect
@@ -159,7 +194,7 @@ class VllmBackend(BaseBackend):
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
         return LlmtraceHooks(
             health_path="/health",
-            model_name=model.hf_path or model.spec.hf_id,
+            model_name=model.spec.hf_id,  # --served-model-name
             tokenizer_id=model.spec.hf_id,
             gpu_ids=[hw.gpu.index] if hw.gpu else [],
         )

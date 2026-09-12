@@ -133,6 +133,29 @@ def _run_disagg_row(profile: Profile, backends: Dict[str, BaseBackend], models: 
     return row
 
 
+def _run_replica_row(profile: Profile, backends: Dict[str, BaseBackend], models: Dict[str, PreparedModel],
+                     hw: HardwareDescriptor, workload: Workload, log_dir: Optional[Path],
+                     replica_runner: Optional[object], objective: str, cons: Constraints,
+                     progress: Optional[Callable[[str, Optional[ComparisonRow]], None]]) -> ComparisonRow:
+    """Measure a replicas profile end to end through the load balancer."""
+    from polyserve.layout import LayoutTrialRunner
+
+    backend = backends[profile.backend]
+    gpus = [g.index for g in hw.gpus if g.vendor == "nvidia"][: profile.replicas]
+    runner = replica_runner or LayoutTrialRunner(backend, models[profile.backend], hw, workload, log_dir=log_dir)
+    row = ComparisonRow(label="polyserve", runtime=f"{profile.backend}-x{profile.replicas}",
+                        runtime_version=backend.version(hw), config=profile.config,
+                        config_key=f"{profile.config.key()} x{profile.replicas}")
+    if progress:
+        progress("polyserve", None)
+    tr = runner.run_replicas(profile.config, gpus, "compare:polyserve")  # type: ignore[attr-defined]
+    row.ok, row.error, row.metrics = tr.ok, tr.error, tr.metrics
+    _score_row(row, objective, cons)
+    if progress:
+        progress("polyserve", row)
+    return row
+
+
 def compare(
     hw: HardwareDescriptor,
     spec: ModelSpec,
@@ -148,6 +171,7 @@ def compare(
     progress: Optional[Callable[[str, Optional[ComparisonRow]], None]] = None,
     power: Optional[object] = None,
     disagg_runner: Optional[object] = None,
+    replica_runner: Optional[object] = None,
 ) -> ComparisonResult:
     """Measure PolyServe's winner and every reference config under the same workload."""
     workload = workload or get_workload(profile.workload)
@@ -215,6 +239,11 @@ def compare(
     if profile.disagg is not None:
         ps = _run_disagg_row(profile, backends, models, hw, workload, log_dir, power, disagg_runner, objective, cons,
                              progress)
+    elif profile.replicas > 1:
+        ps = _run_replica_row(profile, backends, models, hw, workload, log_dir, replica_runner, objective, cons,
+                              progress)
+        result.notes.append(f"PolyServe serves {profile.replicas} replicas on {profile.replicas} GPUs; the stock rows "
+                            "use one GPU, so this row is not a like-for-like throughput comparison")
     else:
         ps = run_row("polyserve", profile.config)
     ps.calibration_seconds = profile.calibration_seconds

@@ -400,6 +400,8 @@ def run_trial(
         small = Workload(
             n_prompts=min(2, workload.n_prompts), prefill_tokens=workload.prefill_tokens,
             decode_tokens=min(16, workload.decode_tokens), concurrencies=(1,), seed=workload.seed + 1,
+            # Same shared prefix as the real prompts, so the warmup leaves it cached as production would.
+            shared_prefix_tokens=workload.shared_prefix_tokens, prefix_text=workload.prefix_text, prefix_fixed=True,
         )
         try:
             asyncio.run(_drive(base_url, hooks, small, 1, request_timeout, counter))

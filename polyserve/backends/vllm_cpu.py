@@ -6,7 +6,7 @@ import math
 import sys
 from typing import List
 
-from polyserve.backends.base import LaunchSpec, LlmtraceHooks, ctx_grid
+from polyserve.backends.base import LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from polyserve.backends.vllm import PAGED_KV_FRACTION, VllmBackend
 from polyserve.hfconfig import load_arch
 from polyserve.memory import MemoryModel, kv_cache_bytes
@@ -28,6 +28,14 @@ class VllmCpuBackend(VllmBackend):
 
     def precisions(self, hw: HardwareDescriptor) -> List[str]:
         return ["bf16"]
+
+    supports_tp = False
+
+    def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
+        return []
+
+    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+        return []
 
     def memory_model(self, hw: HardwareDescriptor) -> MemoryModel:
         return self.calibrated_memory(hw, lambda cfg: int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION), "cpu")
@@ -61,8 +69,7 @@ class VllmCpuBackend(VllmBackend):
             args += ["--max-num-batched-tokens", str(cfg.prefill_budget)]
         if model.spec.revision:
             args += ["--revision", model.spec.revision]
-        for k, v in cfg.extra.items():
-            args += [f"--{k.replace('_', '-')}", str(v)]
+        args += render_extra(cfg.extra)
         kv_gib = max(4, math.ceil(kv_cache_bytes(model, cfg, int(cfg.ctx * cfg.batch * PAGED_KV_FRACTION)) / GiB))
         env = {
             "VLLM_CPU_KVCACHE_SPACE": str(kv_gib),

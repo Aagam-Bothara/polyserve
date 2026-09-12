@@ -31,6 +31,15 @@ def dtype_bytes(name: str) -> int:
     return DTYPE_BYTES.get(name.lower(), 2)
 
 
+# Bytes per KV element for llama.cpp's block-quantized caches: 32 values plus their scale(s).
+KV_ELEMENT_BYTES: Dict[str, float] = {"q8_0": 34 / 32, "q4_0": 18 / 32, "q4_1": 20 / 32, "q5_0": 22 / 32,
+                                      "q5_1": 24 / 32}
+
+
+def kv_element_bytes(name: str) -> float:
+    return KV_ELEMENT_BYTES.get(name.lower(), float(dtype_bytes(name)))
+
+
 def _first(cfg: Dict[str, Any], *keys: str, default: Any = None) -> Any:
     for k in keys:
         if k in cfg and cfg[k] is not None:

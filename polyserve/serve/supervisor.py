@@ -28,7 +28,9 @@ class Supervisor:
         health_interval: float = 5.0,
         max_restarts: int = 5,
         power: Optional[object] = None,
+        gpu_index: Optional[int] = None,
     ):
+        self.gpu_index = gpu_index  # set for one replica of the replicas layout
         self.backend = backend
         self.cfg = cfg
         self.model = model
@@ -78,7 +80,11 @@ class Supervisor:
 
     def _launch(self) -> None:
         with self._lock:
-            self.process = self.backend.launch(self.cfg, self.model, self.port, log_path=self.log_path)
+            if self.gpu_index is not None:
+                spec = self.backend.replica_launch_spec(self.cfg, self.model, self.port, self.gpu_index)
+                self.process = Process(spec, self.port, self.health_url, log_path=self.log_path).start()
+            else:
+                self.process = self.backend.launch(self.cfg, self.model, self.port, log_path=self.log_path)
             if not self.process.wait_ready(timeout=self.startup_timeout):
                 tail = self.process.tail_log(30)
                 self.process.stop()
@@ -135,6 +141,7 @@ class Supervisor:
     def status(self) -> dict:
         return {
             "backend": self.backend.name,
+            "gpu": self.gpu_index,
             "port": self.port,
             "pid": self.process.pid if self.process else None,
             "alive": bool(self.process and self.process.alive()),

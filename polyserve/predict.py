@@ -271,7 +271,8 @@ def observations_from_profile(profile: Profile) -> List[Observation]:
     lp = int(spec.get("prefill_tokens", 256))
     ld = int(spec.get("decode_tokens", 128))
     for t in profile.calibration_table:
-        if not t.ok or t.disagg is not None:  # a two-GPU pair is not a single-engine observation
+        if not t.ok or t.disagg is not None or t.replicas > 1 or t.config.tp > 1:
+            # Multi-GPU trials are not single-engine observations.
             continue
         # Every candidate backend's prepared model is kept, so losing backends are analysable too.
         model = profile.prepared_all.get(t.config.backend) or (

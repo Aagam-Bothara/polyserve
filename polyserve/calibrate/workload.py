@@ -49,12 +49,27 @@ class Workload:
     # Per-token decode latency ceiling, applied under every objective. Prefill latency is what
     # TTFT constrains; this constrains decode, so neither phase can be sacrificed for the other.
     tpot_ceiling_ms: Optional[float] = 100.0
+    # Tokens every prompt starts with (a system prompt, a retrieved document). This is what prefix
+    # caching exploits: only the first request should pay to prefill them.
+    shared_prefix_tokens: int = 0
+    prefix_text: str = ""  # the shared prefix itself; generated from `seed` unless given
+    prefix_fixed: bool = False  # the prefix was given (e.g. a warmup reusing it) and must not change
     prompts: List[str] = field(default_factory=list)
     fitted: bool = False  # prompts were sized with a real tokenizer
 
     def __post_init__(self) -> None:
+        if self.shared_prefix_tokens and not self.prefix_text:
+            self.prefix_text = self._prefix(max(4, int(self.shared_prefix_tokens * 0.8)))
         if not self.prompts:
             self.prompts = self._generate()
+
+    @property
+    def _unique_tokens(self) -> int:
+        return max(8, self.prefill_tokens - self.shared_prefix_tokens)
+
+    def _prefix(self, n_words: int) -> str:
+        rng = random.Random(7_919 * (self.seed + 1))
+        return "Context: " + " ".join(rng.choice(_WORDS) for _ in range(n_words)) + "\n\n"
 
     @property
     def min_ctx(self) -> int:
@@ -67,19 +82,34 @@ class Workload:
 
     def _generate(self) -> List[str]:
         # ~1.25 tokens per short English word on Llama/Qwen tokenizers, so start at 0.8 x tokens words.
-        n_words = max(8, int(self.prefill_tokens * 0.8))
-        return [_PREFIX.format(i=i) + " ".join(self._words(i, n_words)) + _SUFFIX for i in range(self.n_prompts)]
+        n_words = max(8, int(self._unique_tokens * 0.8))
+        return [self.prefix_text + _PREFIX.format(i=i) + " ".join(self._words(i, n_words)) + _SUFFIX
+                for i in range(self.n_prompts)]
 
     def fit_prompts(self, counter: TokenCounter, tolerance: int = 2, max_iter: int = 8) -> "Workload":
         """Resize each prompt so the tokenizer counts within `tolerance` of prefill_tokens."""
         if not counter.available:
             return self
+        if self.shared_prefix_tokens and not self.prefix_fixed:
+            n_words = max(4, int(self.shared_prefix_tokens * 0.8))
+            text = self._prefix(n_words)
+            for _ in range(max_iter):
+                text = self._prefix(n_words)
+                n = counter.count(text)
+                if n is None:
+                    return self
+                if abs(n - self.shared_prefix_tokens) <= tolerance:
+                    break
+                delta = self.shared_prefix_tokens - n
+                step = int(round(delta * n_words / max(n, 1)))
+                n_words = max(4, n_words + (step if step != 0 else (1 if delta > 0 else -1)))
+            self.prefix_text = text
         fitted: List[str] = []
         for i in range(self.n_prompts):
-            n_words = max(4, int(self.prefill_tokens * 0.8))
+            n_words = max(4, int(self._unique_tokens * 0.8))
             prompt = ""
             for _ in range(max_iter):
-                prompt = _PREFIX.format(i=i) + " ".join(self._words(i, n_words)) + _SUFFIX
+                prompt = self.prefix_text + _PREFIX.format(i=i) + " ".join(self._words(i, n_words)) + _SUFFIX
                 n = counter.count(prompt)
                 if n is None:
                     return self
@@ -101,7 +131,8 @@ class Workload:
 
     def describe(self) -> str:
         return (
-            f"{self.name}: {self.n_prompts} prompts x {'' if self.fitted else '~'}{self.prefill_tokens} prefill x "
+            f"{self.name}: {self.n_prompts} prompts x {'' if self.fitted else '~'}{self.prefill_tokens} prefill"
+            f"{f' ({self.shared_prefix_tokens} shared)' if self.shared_prefix_tokens else ''} x "
             f"{self.decode_tokens} decode, concurrency {'/'.join(str(c) for c in self.concurrencies)}, "
             f"TTFT ceiling {self.ttft_ceiling_ms:.0f} ms"
             + (f", TPOT ceiling {self.tpot_ceiling_ms:.0f} ms" if self.tpot_ceiling_ms else "")
@@ -117,6 +148,7 @@ class Workload:
             "concurrencies": list(self.concurrencies),
             "ttft_ceiling_ms": self.ttft_ceiling_ms,
             "tpot_ceiling_ms": self.tpot_ceiling_ms,
+            "shared_prefix_tokens": self.shared_prefix_tokens,
             "seed": self.seed,
         }
 
@@ -134,6 +166,11 @@ _PRESETS: Dict[str, Workload] = {
         concurrencies=(32, 64, 128), ttft_ceiling_ms=1000.0, tpot_ceiling_ms=150.0,
     ),
     "rag": Workload(name="rag", prefill_tokens=6144, decode_tokens=64, ttft_ceiling_ms=1500.0),
+    # Shared-prefix shapes, where prefix caching decides time to first token.
+    "chat-system": Workload(name="chat-system", prefill_tokens=2048, shared_prefix_tokens=1536, decode_tokens=128,
+                            tpot_ceiling_ms=50.0),
+    "rag-shared": Workload(name="rag-shared", prefill_tokens=6144, shared_prefix_tokens=5632, decode_tokens=64,
+                           ttft_ceiling_ms=1500.0),
 }
 
 WORKLOAD_NAMES: Tuple[str, ...] = tuple(_PRESETS)

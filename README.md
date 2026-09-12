@@ -53,7 +53,7 @@ flowchart LR
 
 2. **Choose candidate backends.** The hardware rules above determine which backends to try. If several are available, calibration decides which one to use.
 
-3. **Prepare the model.** vLLM and SGLang use Hugging Face weights directly. For llama.cpp, PolyServe finds a pre-quantised GGUF on the Hub (Q4_K_M, Q5_K_M, Q6_K or Q8_0), or converts and quantises FP16 weights locally. It only prepares the quantizations that pass memory planning.
+3. **Prepare the model.** vLLM and SGLang use Hugging Face weights directly, plus any pre-quantized 4-bit AWQ or GPTQ checkpoint of the same model found on the Hub. For llama.cpp, PolyServe finds a pre-quantised GGUF on the Hub (Q4_K_M, Q5_K_M, Q6_K or Q8_0), or converts and quantises FP16 weights locally. It only prepares the quantizations that pass memory planning.
 
 4. **Check what fits in memory.** Before launching a backend, the planner estimates its memory needs:
 
@@ -63,7 +63,7 @@ flowchart LR
 
    Each trial records the estimate alongside measured peak memory from NVML and the backend's own weight, KV cache and workspace figures. `polyserve memory-report` shows the errors by backend. Add `--apply` to replace the initial workspace constant and 5% margin with values fitted to your machine.
 
-5. **Benchmark the candidates.** Calibration starts with a short run per quantization and keeps the top two. It then selects the largest safe memory configuration and tries different batch sizes and concurrency levels.
+5. **Benchmark the candidates.** Calibration starts with a short run per quantization and keeps the top two. It then selects the largest safe memory configuration and tries different batch sizes and concurrency levels. Later stages try variations of the leader: the prefill knob, a quantized KV cache, prefix-cache settings and speculative decoding (see [Search options](#search-options)).
 
    A performance predictor helps narrow the search. Its roofline model accounts for weight and KV bandwidth, decode and prefill compute, and queueing beyond the available slots. `polyserve fit` fits three efficiency parameters per backend using your machine's trials. The predictor skips quantizations expected to perform far below the best and tests promising batch settings first. `polyserve predict` shows the predictions without launching a backend; `fit` reports leave-one-out error and rank correlation so you can check their accuracy.
 
@@ -85,6 +85,10 @@ An interactive chat and a long document query need different settings. Use `--wo
 | `generation` | 128 | 1024 | 1 / 4 / 8 | 500 ms | code / story generation |
 | `high-concurrency` | 256 | 64 | 32 / 64 / 128 | 1000 ms | many short requests |
 | `rag` | 6144 | 64 | 1 / 4 / 8 | 1500 ms | retrieval-augmented answers |
+| `chat-system` | 2048, 1536 of it shared | 128 | 1 / 4 / 8 | 500 ms | a long system prompt on every turn |
+| `rag-shared` | 6144, 5632 of it shared | 64 | 1 / 4 / 8 | 1500 ms | many questions about one document |
+
+In the two shared-prefix presets every prompt starts with the same text, which is where prefix caching pays: only the first request should prefill it. The warmup sends that same prefix, so trials measure a warm cache, as production traffic would see.
 
 Prompt lengths are exact when the model's tokenizer is available (prompts are fitted to the target token count), and output tokens are counted from the server's `usage` or the tokenizer, never from stream chunks. The planner drops any config whose context cannot hold prefill + decode.
 
@@ -101,11 +105,13 @@ Choose what you want to optimise. PolyServe ranks configurations using the rules
 | `--objective` | Rule |
 |---|---|
 | `throughput` | Highest tokens per second |
-| `latency` | Lowest TTFT while meeting the minimum tokens per second |
+| `latency` | Lowest request latency (TTFT + TPOT × output tokens) while meeting the minimum tokens per second |
 | `balanced` (default) | Highest tokens per second within the workload's TTFT limit; override it with `--ttft-ceiling` |
-
-Every objective also respects a per-token latency (TPOT) ceiling, the decode-phase counterpart of the TTFT limit. Each workload carries one (50 ms for `chat` and `generation`, 150 ms for `high-concurrency`, 100 ms otherwise) and `--tpot-ceiling` overrides it, so no configuration can win by starving either phase.
 | `efficiency` | Lowest joules per token while meeting the minimum tokens per second |
+
+Every objective also respects a per-token latency (TPOT) ceiling, the decode-phase counterpart of the TTFT limit. Each workload carries one (50 ms for `chat`, `chat-system` and `generation`, 150 ms for `high-concurrency`, 100 ms otherwise) and `--tpot-ceiling` overrides it, so no configuration can win by starving either phase.
+
+`latency` used to rank by TTFT alone. It now counts the whole answer, because speculative decoding leaves TTFT unchanged and cuts time per token, and a TTFT-only rule could never pick it. Profiles cached under the old rule should be recalibrated.
 
 The minimum throughput defaults to 50% of the best observed tokens per second. Set `--tok-s-floor` to use an absolute value instead. If no configuration meets the constraint, PolyServe chooses the one that comes closest and records that in the profile.
 
@@ -136,12 +142,29 @@ Prefill, which processes the prompt, is compute bound. Decode, which generates t
 
 Disaggregation needs vLLM, two NVIDIA GPUs and the connector's package (`pip install nixl`). With `--phases disaggregated`, PolyServe checks all three before spending a calibration and refuses with the reason. Each engine's settings, the GPU split and the connector are cached in the profile, shown at `/polyserve/profile`, and restarted together if either engine dies. **The disaggregated mode is tested end to end against fake engines that follow vLLM's KV-transfer handshake, and has not yet run on real GPUs.**
 
+### Search options
+
+The benchmarks below show where the GPU gain came from: fp8 weights, which halve the bytes each decode step reads. The next four options follow that lead, and the fifth adds GPUs. Each one adds a calibration stage on the current leader, and the objective decides whether the leader changes, so a strategy that loses on your machine is measured and dropped rather than assumed.
+
+| Option | Default | What it adds |
+|---|---|---|
+| `--quant auto\|<list>` | `auto` | Which weight precisions calibration may choose. `auto` now includes 4-bit AWQ and GPTQ checkpoints on vLLM and SGLang: PolyServe finds a pre-quantized repository of the same model on the Hub (the model's author first, then known quantizers), confirms from its `quantization_config` that it really is 4-bit, and sizes it from its files. `--quant bf16` rules out any quality change from quantization; `--quant bf16,fp8` allows 8-bit but not 4-bit. |
+| `--kv-quant on\|off` | `on` | A quantized KV cache: fp8 on vLLM (Hopper, or Ampere and Ada with FlashInfer), fp8_e5m2 on SGLang, q8_0 and q4_0 on llama.cpp. The memory planner sizes each cache type exactly, and the stage also tries the next batch size up when only the smaller cache makes it fit. |
+| `--prefix-cache on\|off` | `on` | Keeps vLLM's prefix caching and SGLang's radix cache on. On the shared-prefix workloads it also tries llama.cpp's `--cache-reuse` and `--kv-unified`. `off` disables the cache everywhere, for measuring what it is worth. |
+| `--speculative on\|off` | `on` | Speculative decoding: n-gram prompt lookup on vLLM, which needs no second model, and a small draft model of the same family (for example Qwen2.5-0.5B for the larger Qwen2.5 models, Llama-3.2-1B for Llama 3.x) on vLLM and on llama.cpp. It usually helps at low concurrency and hurts at high concurrency, where the GPU has no spare bandwidth for verification. |
+| `--layout single\|replicas\|tp\|auto` | `single` | Multi-GPU arrangement. `replicas` runs one engine per GPU behind a least-outstanding-requests load balancer; `tp` shards one engine across the GPUs with tensor parallelism (vLLM, SGLang). `auto` measures both against the single-GPU winner and keeps the best. Replicas and tensor parallel are compared through the same balancer and workload, and a replicas profile is served by the balancer on `:8000`. |
+
+A profile records any non-default options and is cached under its own name, so a `--quant bf16` profile is never served to a caller who asked for `auto`. `--layout` and `--phases` both use the extra GPUs, so only one of them can be set.
+
+To see whether 4-bit weights cost quality on your model, run `benchmarks/quality_check.py --quants bf16 fp8 awq gptq`. It loads the same checkpoints PolyServe would pick. **All five options are tested against fake engines and a fake Hub, and none has been measured on real hardware yet.**
+
 ---
 
 ## CLI
 
 ```
 polyserve serve <model> [--objective X] [--workload W] [--phases MODE] [--power MODE] [--tpot-ceiling MS] [--port N] [--backend NAME] [--skip-calibration]
+                [--quant auto|LIST] [--kv-quant on|off] [--prefix-cache on|off] [--speculative on|off] [--layout MODE]
 polyserve probe                 # print HardwareDescriptor
 polyserve workloads             # list workload presets
 polyserve plan <model>          # print feasible configs without running them
@@ -253,6 +276,7 @@ These are gaps, not claims. In rough order of how much they would change the con
 4. **Whether the search helps on GPU at all.** The isolation experiment says it does not, on one card with one model at three workloads. Finding out whether that holds on a card where memory is tight, or is an artifact of a 3B model on 24 GB, is the most interesting open question in this repository.
 5. **Energy tuning on real hardware.** `--power` has only run against a simulated NVML. It needs root on the host, so it has to be measured on a machine you control. Whether the energy-optimal point sits near 70% of full power for these workloads, and whether it differs between prefill-heavy `rag` and decode-heavy `generation`, is still a prediction.
 6. **Disaggregated prefill and decode on real GPUs.** `--phases disaggregated` has only run against fake engines. Whether moving the KV cache between two GPUs on one node beats a single engine at 3B, where the unified result already has memory headroom, is open, and a loss there would not be surprising: the published gains come from larger models and heavier prefill contention.
+7. **The five search options on real hardware.** 4-bit weights, a quantized KV cache, prefix caching, speculative decoding and the replicas and tensor-parallel layouts have all run only against fake engines. The open questions: what 4-bit costs in perplexity against fp8's 1.1%; whether an fp8 KV cache helps a 3B model, which already has KV headroom on 24 GB; how much prefix caching cuts TTFT on `rag-shared`; at what concurrency speculative decoding turns from a gain into a loss; and whether tensor parallel ever beats replicas for a model that fits on one GPU.
 
 ## Backend interface
 

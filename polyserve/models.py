@@ -128,6 +128,8 @@ class PreparedModel(BaseModel):
     hf_path: Optional[str] = None
     gguf_paths: Dict[str, str] = Field(default_factory=dict)  # quant -> path
     weights_bytes: Dict[str, int] = Field(default_factory=dict)  # quant/precision -> bytes
+    hf_paths: Dict[str, str] = Field(default_factory=dict)  # quant -> pre-quantized repo (AWQ, GPTQ)
+    draft_paths: Dict[str, str] = Field(default_factory=dict)  # draft model id -> GGUF path (llama.cpp)
 
     def weights_for(self, quant: str) -> int:
         if quant in self.weights_bytes:
@@ -156,6 +158,9 @@ class Config(BaseModel):
     # chunked_prefill_size) or llama.cpp micro-batch (-ub). None = the engine's own default.
     prefill_budget: Optional[int] = None
     kv_dtype: str = "auto"
+    prefix_cache: Optional[bool] = None  # None = the engine default (on for vLLM and SGLang)
+    spec_decode: Optional[str] = None  # speculative decoding: "ngram:<k>" | "draft:<hf_id>:<k>"
+    tp: int = 1  # tensor-parallel degree across GPUs
     extra: Dict[str, Any] = Field(default_factory=dict)
     # Energy tuning, applied through NVML while the backend runs rather than as launch flags.
     power_limit_w: Optional[int] = None  # board power cap
@@ -173,6 +178,15 @@ class Config(BaseModel):
             parts.append(f"pb{self.prefill_budget}")
         if self.kv_dtype != "auto":
             parts.append(f"kv{self.kv_dtype}")
+        if self.prefix_cache is not None:
+            parts.append("pc" if self.prefix_cache else "nopc")
+        if self.spec_decode is not None:
+            parts.append(f"sd[{self.spec_decode}]")
+        if self.tp > 1:
+            parts.append(f"tp{self.tp}")
+        for k in sorted(self.extra):
+            if k != "threads":
+                parts.append(f"{k}={self.extra[k]}")
         if self.power_limit_w is not None:
             parts.append(f"pl{self.power_limit_w}")
         if self.sm_clock_mhz is not None:
@@ -267,6 +281,7 @@ class TrialResult(BaseModel):
     started_at: float = Field(default_factory=time.time)
     memory: Optional[MemoryObservation] = None
     disagg: Optional[DisaggSpec] = None  # set for trials of a disaggregated prefill/decode pair
+    replicas: int = 1  # engines measured behind a load balancer (the replicas layout)
 
     @property
     def ok(self) -> bool:
@@ -290,6 +305,10 @@ class Profile(BaseModel):
     workload_spec: Dict[str, Any] = Field(default_factory=dict)
     power_mode: str = "off"  # "off" | "cap" | "clock" | "both"
     phases: str = "unified"  # requested mode: "unified" | "disaggregated" | "auto"
+    layout: str = "single"  # requested multi-GPU layout: "single" | "replicas" | "tp" | "auto"
+    replicas: int = 1  # engines served behind the load balancer
+    # Non-default search options that shaped this profile; part of its cache path.
+    options: Dict[str, str] = Field(default_factory=dict)
     backend: str
     backend_version: Optional[str]
     config: Config

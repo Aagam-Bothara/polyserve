@@ -41,6 +41,69 @@ class PlanResult:
         return sum(self.considered.values())
 
 
+@dataclass
+class SearchOptions:
+    """Switches for the optional search dimensions. The defaults explore everything that is safe."""
+
+    quants: Optional[List[str]] = None  # None = every precision the backend supports
+    kv_quant: bool = True  # quantized KV caches
+    speculative: bool = True  # n-gram and draft-model speculative decoding
+    prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
+    phase_tuning: bool = True  # the prefill-knob stage
+
+    def key(self) -> Dict[str, str]:
+        """Non-default options, recorded in the profile and in its cache path."""
+        out: Dict[str, str] = {}
+        if self.quants is not None:
+            out["quant"] = "+".join(self.quants)
+        if not self.kv_quant:
+            out["kv"] = "off"
+        if not self.speculative:
+            out["spec"] = "off"
+        if not self.prefix_cache:
+            out["prefix"] = "off"
+        if not self.phase_tuning:
+            out["prefill"] = "off"
+        return out
+
+
+def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
+    """Leader variants with a quantized KV cache, plus the batch step that the smaller cache admits."""
+    from polyserve.memory import estimate
+
+    def fn(c: Config) -> List[Config]:
+        be = reg[c.backend]
+        pm = plan.prepared.get(c.backend)
+        if pm is None:
+            return []
+        mm = be.memory_model(hw)
+
+        def fits(x: Config) -> bool:
+            try:
+                return estimate(hw, pm, x, mm).feasible
+            except Exception:
+                return False
+
+        out: List[Config] = []
+        for kd in be.kv_dtypes(hw):
+            if kd == c.kv_dtype:
+                continue
+            v = c.model_copy(update={"kv_dtype": kd})
+            if fits(v):
+                out.append(v)
+            bigger = [b for b in be.batch_ladder() if b > c.batch]
+            if bigger:
+                update: Dict[str, object] = {"batch": bigger[0]}
+                if v.prefill_budget is not None and v.prefill_budget < bigger[0]:
+                    update["prefill_budget"] = None  # vLLM: the budget must cover the batch
+                vb = v.model_copy(update=update)
+                if fits(vb) and not fits(vb.model_copy(update={"kv_dtype": c.kv_dtype})):
+                    out.append(vb)
+        return out
+
+    return fn
+
+
 def select(
     hw: HardwareDescriptor, spec: ModelSpec, force: Optional[str] = None
 ) -> Tuple[List[str], Dict[str, BaseBackend]]:
@@ -55,14 +118,23 @@ def prepare_and_plan(
     reg: Dict[str, BaseBackend],
     materialize: bool = False,
     workload: Optional[Workload] = None,
+    quants: Optional[List[str]] = None,
 ) -> PlanResult:
-    """Prepare each candidate backend's model, enumerate its grid, keep what fits the workload."""
+    """Prepare each candidate backend's model, enumerate its grid, keep what fits the workload.
+
+    `quants` restricts weight precisions (the --quant option); None allows everything supported.
+    """
     result = PlanResult(hw=hw, spec=spec, candidates=list(candidates))
     min_ctx = workload.min_ctx if workload else 0
     for name in candidates:
         backend = reg[name]
         try:
-            prepared = backend.prepare(spec, hw)
+            allowed = None
+            if quants is not None:
+                allowed = [q for q in backend.supported_quants(hw) if q in quants]
+                if not allowed:
+                    raise RuntimeError(f"none of --quant {','.join(quants)} is available on {name}")
+            prepared = backend.prepare(spec, hw, quants=allowed)
             grid = backend.candidate_configs(hw, prepared, min_ctx=min_ctx)
             if not grid:
                 raise RuntimeError(
@@ -156,13 +228,24 @@ def calibrate(
     power_controller: Optional[object] = None,
     power_points: Optional[list] = None,
     phase_tuning: bool = True,
+    options: Optional[SearchOptions] = None,
 ) -> Profile:
+    opts = options or SearchOptions()
     workload = workload or get_workload("default")
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                              tpot_ceiling_ms=workload.tpot_ceiling_ms)
     feasible = plan.all_feasible
     if not feasible:
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")
+    if not opts.prefix_cache:
+        feasible = [c.model_copy(update={"prefix_cache": False}) for c in feasible]
+    stages = []
+    if opts.kv_quant:
+        stages.append(("kv", kv_variants_fn(hw, reg, plan)))
+    if opts.prefix_cache and workload.shared_prefix_tokens > 0:
+        stages.append(("prefix", lambda c: reg[c.backend].prefix_variants(c)))
+    if opts.speculative:
+        stages.append(("spec", lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend])))
     controller, points, power_notes = None, [], []
     if power_points is not None:  # injected (tests, or a caller that already probed the GPU)
         controller, points = power_controller, list(power_points)
@@ -181,8 +264,9 @@ def calibrate(
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
-                          power_points=points,
-                          prefill_variants=(lambda c: reg[c.backend].prefill_variants(c)) if phase_tuning else None)
+                          power_points=points, variant_stages=stages,
+                          prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
+                                            if phase_tuning and opts.phase_tuning else None))
     t0 = time.monotonic()
     try:
         winner, notes = search.run(feasible)
@@ -202,6 +286,7 @@ def calibrate(
     profile.calibration_seconds = elapsed
     profile.calibration_trials = len(search.results)
     profile.power_mode = power_mode
+    profile.options = opts.key()
     return profile
 
 
@@ -244,6 +329,8 @@ def resolve_profile(
     power_mode: str = "off",
     phases: str = "unified",
     kv_connector: str = "nixl",
+    options: Optional[SearchOptions] = None,
+    layout: str = "single",
 ) -> Profile:
     """Cached profile if valid, else run the full pipeline and cache the result.
 
@@ -254,11 +341,17 @@ def resolve_profile(
     workload = workload or get_workload("default")
     say("probe")
     hw = hw or probe()
+    opts = options or SearchOptions()
+    if phases != "unified" and layout != "single":
+        raise RuntimeError("choose either --phases (disaggregated prefill/decode) or --layout (replicas, tp), not both")
     if phases != "unified" and not skip_calibration:
         return _resolve_phased(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
-                               on_stage, power_mode, phases, kv_connector)
+                               on_stage, power_mode, phases, kv_connector, opts)
+    if layout != "single" and not skip_calibration:
+        return _resolve_layout(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
+                               on_stage, power_mode, opts, layout)
     if not recalibrate and not skip_calibration:
-        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode)
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=opts.key())
         if cached is not None and (force_backend is None or cached.backend == force_backend):
             say("cache hit")
             return cached
@@ -267,13 +360,14 @@ def resolve_profile(
     if not candidates:
         raise RuntimeError("no backend supports this machine/model; run `polyserve probe` for details")
     say("prepare + plan")
-    plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload)
+    plan = prepare_and_plan(hw, spec, candidates, reg, materialize=not skip_calibration, workload=workload,
+                            quants=opts.quants)
     if skip_calibration:
         say("defaults")
         return default_profile(hw, spec, plan, reg, objective, workload=workload)
     say("calibrate")
     profile = calibrate(hw, spec, objective, plan, reg, workload=workload, constraints=constraints, progress=progress,
-                        power_mode=power_mode)
+                        power_mode=power_mode, options=opts)
     profile_cache.save(profile)
     return profile
 
@@ -281,12 +375,13 @@ def resolve_profile(
 def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str], recalibrate: bool,
                     workload: Workload, constraints: Optional[Constraints], progress: Optional[ProgressFn],
                     hw: HardwareDescriptor, on_stage: Optional[Callable[[str], None]], power_mode: str,
-                    phases: str, kv_connector: str) -> Profile:
+                    phases: str, kv_connector: str, options: Optional[SearchOptions] = None) -> Profile:
     from polyserve.disagg import calibrate_disaggregated, check_support
 
     say = on_stage or (lambda s: None)
     if not recalibrate:
-        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, phases)
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, phases,
+                                    options=(options or SearchOptions()).key())
         if cached is not None and (force_backend is None or cached.backend == force_backend):
             say("cache hit")
             return cached
@@ -300,11 +395,40 @@ def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str
     # Disaggregation runs on vLLM; `auto` lets the unified search choose freely and falls back if needed.
     base = resolve_profile(spec, objective, force_backend=force_backend or ("vllm" if phases == "disaggregated" else None),
                            recalibrate=recalibrate, workload=workload, constraints=constraints, progress=progress,
-                           hw=hw, on_stage=on_stage, power_mode=power_mode if phases == "auto" else "off")
+                           hw=hw, on_stage=on_stage, power_mode=power_mode if phases == "auto" else "off",
+                           options=options)
     _, reg = select(hw, spec, force=base.backend)
     say("disaggregate")
     profile = calibrate_disaggregated(hw, spec, objective, base, reg, workload=workload, constraints=constraints,
                                       phases=phases, connector=kv_connector, progress=progress, power_mode=power_mode,
                                       log_dir=profile_cache.logs_dir() / spec.safe_id)
+    profile_cache.save(profile)
+    return profile
+
+
+def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str], recalibrate: bool,
+                    workload: Workload, constraints: Optional[Constraints], progress: Optional[ProgressFn],
+                    hw: HardwareDescriptor, on_stage: Optional[Callable[[str], None]], power_mode: str,
+                    options: SearchOptions, layout: str) -> Profile:
+    from polyserve.layout import calibrate_layout
+
+    say = on_stage or (lambda s: None)
+    key = {**options.key(), "layout": layout}
+    if not recalibrate:
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=key)
+        if cached is not None and (force_backend is None or cached.backend == force_backend):
+            say("cache hit")
+            return cached
+    gpus = [g for g in hw.gpus if g.vendor == "nvidia"]
+    if layout != "auto" and len(gpus) < 2:
+        raise RuntimeError(f"--layout {layout} is not possible here: multi-GPU layouts need two NVIDIA GPUs; "
+                           f"{len(gpus)} visible")
+    base = resolve_profile(spec, objective, force_backend=force_backend, recalibrate=recalibrate, workload=workload,
+                           constraints=constraints, progress=progress, hw=hw, on_stage=on_stage,
+                           power_mode=power_mode, options=options)
+    _, reg = select(hw, spec, force=base.backend)
+    say("layout")
+    profile = calibrate_layout(hw, objective, base, reg, layout, workload=workload, constraints=constraints,
+                               progress=progress, log_dir=profile_cache.logs_dir() / spec.safe_id)
     profile_cache.save(profile)
     return profile

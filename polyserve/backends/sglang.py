@@ -5,13 +5,14 @@ from __future__ import annotations
 import importlib.util
 import logging
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid
+from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from polyserve.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
+from polyserve.quantized import INT4_METHODS, hf_weight_options
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +51,27 @@ class SglangBackend(BaseBackend):
         out = ["bf16" if cc >= (8, 0) else "fp16"]
         if cc >= (8, 9):  # SGLang fp8 path targets Ada/Hopper
             out.append("fp8")
+        if cc >= (7, 5):  # pre-quantized 4-bit checkpoints
+            out += list(INT4_METHODS)
         return out
+
+    def supported_quants(self, hw: HardwareDescriptor) -> List[str]:
+        return self.precisions(hw)
 
     def prepare(self, model: ModelSpec, hw: HardwareDescriptor, quants: Optional[List[str]] = None) -> PreparedModel:
         arch = load_arch(model)
-        params = arch.num_params or 0
-        weights = {p: params * (1 if p == "fp8" else dtype_bytes(p)) for p in (quants or self.precisions(hw))}
-        return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, weights_bytes=weights)
+        weights, paths = hf_weight_options(model, arch.num_params or 0, list(quants or self.precisions(hw)),
+                                           lambda p: 1 if p == "fp8" else dtype_bytes(p))
+        return PreparedModel(spec=model, backend=self.name, arch=arch, hf_path=model.hf_id, hf_paths=paths,
+                             weights_bytes=weights)
+
+    supports_tp = True
+
+    def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
+        return ["fp8_e5m2"] if hw.gpu is not None and hw.gpu.cc >= (8, 0) else []
+
+    def batch_ladder(self) -> Tuple[int, ...]:
+        return (16, 64, 256, 512)
 
     def materialize(self, model: PreparedModel, quants: List[str]) -> PreparedModel:
         return model
@@ -88,7 +103,8 @@ class SglangBackend(BaseBackend):
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         args = [
             sys.executable, "-m", "sglang.launch_server",
-            "--model-path", model.hf_path or model.spec.hf_id,
+            "--model-path", model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id,
+            "--served-model-name", model.spec.hf_id,
             "--host", "127.0.0.1",
             "--port", str(port),
             "--context-length", str(cfg.ctx),
@@ -104,10 +120,13 @@ class SglangBackend(BaseBackend):
             args += ["--dtype", "bfloat16" if cfg.quant == "bf16" else "float16"]
         if cfg.kv_dtype != "auto":
             args += ["--kv-cache-dtype", cfg.kv_dtype]
-        if model.spec.revision:
+        if cfg.prefix_cache is False:
+            args += ["--disable-radix-cache"]
+        if cfg.tp > 1:
+            args += ["--tp-size", str(cfg.tp)]
+        if model.spec.revision and cfg.quant not in INT4_METHODS:
             args += ["--revision", model.spec.revision]
-        for k, v in cfg.extra.items():
-            args += [f"--{k.replace('_', '-')}", str(v)]
+        args += render_extra(cfg.extra)
         return LaunchSpec(args=args)
 
     PREFILL_BUDGETS = (2048, 8192, 16384)
@@ -118,7 +137,7 @@ class SglangBackend(BaseBackend):
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
         return LlmtraceHooks(
             health_path="/health",
-            model_name=model.hf_path or model.spec.hf_id,
+            model_name=model.spec.hf_id,  # --served-model-name
             tokenizer_id=model.spec.hf_id,
             gpu_ids=[hw.gpu.index] if hw.gpu else [],
         )

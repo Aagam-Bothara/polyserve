@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid
+from polyserve import speculative
+from polyserve.backends.base import BaseBackend, LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
 from polyserve.gguf import (
     GGUF_QUANTS,
     GGUFCandidate,
@@ -62,6 +63,15 @@ class LlamaCppBackend(BaseBackend):
             else:
                 prepared.weights_bytes[q] = estimate_gguf_bytes(params, q)
                 prepared.gguf_paths[q] = f"convert://{q}"
+        # A small same-family draft model for speculative decoding, when the Hub has a GGUF of it.
+        draft = speculative.draft_for(model.hf_id)
+        if draft:
+            try:
+                d = search_hub_gguf(ModelSpec(hf_id=draft), ["Q8_0"]).get("Q8_0")
+                if d is not None:
+                    prepared.draft_paths[draft] = f"hf://{d.repo_id}/{d.filename}"
+            except Exception as exc:
+                logger.debug("no draft GGUF for %s: %s", draft, exc)
         return prepared
 
     def materialize(self, model: PreparedModel, quants: List[str]) -> PreparedModel:
@@ -86,6 +96,15 @@ class LlamaCppBackend(BaseBackend):
                 if q not in produced:
                     model.gguf_paths.pop(q, None)
                     model.weights_bytes.pop(q, None)
+        for draft, ref in list(model.draft_paths.items()):
+            if ref.startswith("hf://"):
+                repo, _, fname = ref[len("hf://"):].rpartition("/")
+                try:
+                    model.draft_paths[draft] = str(download_gguf(GGUFCandidate(repo_id=repo, filename=fname,
+                                                                               quant="Q8_0")))
+                except Exception as exc:
+                    logger.warning("draft model %s unavailable: %s", draft, exc)
+                    model.draft_paths.pop(draft, None)
         return model
 
     # ---- memory: llama-server allocates the full KV for -c up front (per-slot ctx x n_parallel)
@@ -94,6 +113,30 @@ class LlamaCppBackend(BaseBackend):
         return self.calibrated_memory(hw, lambda cfg: cfg.ctx * cfg.batch, "gpu" if self.cuda else "cpu")
 
     # ---- configs
+
+    def supported_quants(self, hw: HardwareDescriptor) -> List[str]:
+        return list(GGUF_QUANTS)
+
+    def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
+        return ["q8_0", "q4_0"]
+
+    def batch_ladder(self) -> Tuple[int, ...]:
+        return (1, 4, 8, 16)
+
+    def prefix_variants(self, cfg: Config) -> List[Config]:
+        # Reuse cached prompt chunks by KV shifting, and share one KV buffer across slots so a common
+        # prefix computed by one slot serves every slot.
+        options = [{"cache_reuse": 256}, {"kv_unified": True}]
+        return [cfg.model_copy(update={"extra": {**cfg.extra, **o}}) for o in options
+                if any(cfg.extra.get(k) != v for k, v in o.items())]
+
+    def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
+        draft = speculative.draft_for(model.spec.hf_id)
+        path = model.draft_paths.get(draft or "")
+        if not draft or not path or path.startswith(("hf://", "convert://")):
+            return []
+        spec = speculative.draft(draft, speculative.DRAFT_TOKENS_LLAMACPP)
+        return [] if spec == cfg.spec_decode else [cfg.model_copy(update={"spec_decode": spec})]
 
     def _quants(self, model: PreparedModel) -> List[str]:
         return [q for q in GGUF_QUANTS if q in model.weights_bytes] or list(model.weights_bytes)
@@ -157,14 +200,19 @@ class LlamaCppBackend(BaseBackend):
         threads = cfg.extra.get("threads")
         if threads:
             args += ["-t", str(threads)]
-        if self.cuda:
-            args += ["-fa", "on"]
+        if self.cuda or cfg.kv_dtype != "auto":
+            args += ["-fa", "on"]  # a quantized V cache needs flash attention, on CPU too
         if cfg.kv_dtype != "auto":
             args += ["-ctk", cfg.kv_dtype, "-ctv", cfg.kv_dtype]
-        for k, v in cfg.extra.items():
-            if k == "threads":
-                continue
-            args += [f"--{k.replace('_', '-')}", str(v)]
+        if cfg.spec_decode:
+            kind, draft, k = speculative.parse(cfg.spec_decode)
+            draft_path = model.draft_paths.get(draft or "")
+            if kind != "draft" or not draft_path or draft_path.startswith(("hf://", "convert://")):
+                raise RuntimeError(f"draft model for {cfg.spec_decode} not materialized")
+            args += ["-md", draft_path, "--draft-max", str(k)]
+            if self.cuda:
+                args += ["-ngld", "999"]
+        args += render_extra(cfg.extra, skip=("threads",))
         env = {}
         if not self.cuda:
             env["CUDA_VISIBLE_DEVICES"] = ""

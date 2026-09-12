@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional, Sequence, Tuple
 
-from polyserve.hfconfig import dtype_bytes
+from polyserve.hfconfig import kv_element_bytes
 from polyserve.models import Config, HardwareDescriptor, MemoryEstimate, MiB, PreparedModel
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ def safety_margin(available: int, fraction: float = DEFAULT_MARGIN_FRACTION) -> 
 
 def kv_cache_bytes(model: PreparedModel, cfg: Config, kv_tokens: int) -> int:
     kv_dtype = cfg.kv_dtype if cfg.kv_dtype != "auto" else model.arch.torch_dtype
-    return model.arch.kv_bytes_per_token(dtype_bytes(kv_dtype)) * kv_tokens
+    return int(model.arch.kv_bytes_per_token(1) * kv_element_bytes(kv_dtype) * kv_tokens)
 
 
 class MemoryModel:
@@ -56,6 +56,11 @@ def estimate(
         frac = min(1.0, max(0.0, cfg.n_gpu_layers / max(model.arch.num_layers, 1)))
         weights = int(weights * frac)
         kv = int(kv * frac)
+
+    # Tensor parallel: weights and KV are sharded across GPUs; workspace and margin stay per GPU.
+    if cfg.tp > 1:
+        weights //= cfg.tp
+        kv //= cfg.tp
 
     if available is None:
         available = hw.gpu.vram_free_bytes if (mm.device == "gpu" and hw.gpu) else hw.cpu.ram_free_bytes

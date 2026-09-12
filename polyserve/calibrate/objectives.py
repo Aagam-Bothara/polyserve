@@ -3,7 +3,7 @@
 | objective   | rule                                   |
 |-------------|----------------------------------------|
 | throughput  | max tok/s                              |
-| latency     | min TTFT   s.t. tok/s >= floor         |
+| latency     | min request latency (TTFT + TPOT x tokens) s.t. tok/s >= floor |
 | balanced    | max tok/s  s.t. TTFT   <= ceiling      |
 | efficiency  | min J/tok  s.t. tok/s >= floor         |
 
@@ -77,6 +77,20 @@ def _levels(r: TrialResult) -> List[TrialMetrics]:
     return levels or [r.metrics]
 
 
+def _e2e_latency(m: TrialMetrics) -> float:
+    """Median request latency: time to first token plus the rest of the answer at TPOT.
+
+    Counting decode makes the latency objective see speculative decoding, which leaves TTFT
+    alone and cuts time per token.
+    """
+    ttft = _ttft(m)
+    if not math.isfinite(ttft):
+        return ttft
+    per_request = (m.output_tokens / m.requests) if m.requests else 0.0
+    tpot = m.tpot_ms if (m.tpot_ms is not None and math.isfinite(m.tpot_ms)) else 0.0
+    return ttft + tpot * max(0.0, per_request - 1)
+
+
 def _score_and_constraint(
     objective: str, cons: Constraints, results: Sequence[TrialResult]
 ) -> Tuple[Callable[[TrialMetrics], float], Callable[[TrialMetrics], float]]:
@@ -85,7 +99,7 @@ def _score_and_constraint(
         return (lambda m: -m.tok_s), (lambda m: 0.0)
     if objective == "latency":
         floor = cons.tok_s_floor(results)
-        return _ttft, (lambda m: max(0.0, floor - m.tok_s))
+        return _e2e_latency, (lambda m: max(0.0, floor - m.tok_s))
     if objective == "balanced":
         return (lambda m: -m.tok_s), (lambda m: max(0.0, _ttft(m) - cons.ttft_ceiling_ms))
     if objective == "efficiency":
@@ -115,7 +129,9 @@ def _capability(r: TrialResult) -> Tuple[int, int, float]:
 def _variant_key(r: TrialResult) -> str:
     """What makes two trials 'the same configuration at different power': everything but power."""
     d = getattr(r, "disagg", None)
-    return r.config.base_key() + (f"|pd:{d.prefill.key()}" if d is not None else "")
+    reps = getattr(r, "replicas", 1)
+    return (r.config.base_key() + (f"|pd:{d.prefill.key()}" if d is not None else "")
+            + (f"|x{reps}" if reps > 1 else ""))
 
 
 def _joules(x: Ranked) -> float:
