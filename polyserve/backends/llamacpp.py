@@ -148,10 +148,12 @@ class LlamaCppBackend(BaseBackend):
             "--port", str(port),
             "-c", str(cfg.ctx * n_parallel),  # -c is total context, split across slots
             "-np", str(n_parallel),
-            "-b", str(cfg.n_batch or 512),
+            "-b", str(max(cfg.n_batch or 512, cfg.prefill_budget or 0)),  # logical batch must cover -ub
             "-ngl", str(cfg.n_gpu_layers if cfg.n_gpu_layers is not None else (999 if self.cuda else 0)),
             "--alias", model.spec.hf_id,
         ]
+        if cfg.prefill_budget is not None:
+            args += ["-ub", str(cfg.prefill_budget)]
         threads = cfg.extra.get("threads")
         if threads:
             args += ["-t", str(threads)]
@@ -167,6 +169,13 @@ class LlamaCppBackend(BaseBackend):
         if not self.cuda:
             env["CUDA_VISIBLE_DEVICES"] = ""
         return LaunchSpec(args=args, env=env)
+
+    # Physical prompt-processing batch (-ub) to try around the engine default of 512.
+    UBATCHES = (256, 1024, 2048)
+
+    def prefill_variants(self, cfg: Config) -> List[Config]:
+        return [cfg.model_copy(update={"prefill_budget": ub, "n_batch": max(cfg.n_batch or 512, ub)})
+                for ub in self.UBATCHES if ub != cfg.prefill_budget]
 
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
         return LlmtraceHooks(

@@ -57,6 +57,8 @@ class VllmCpuBackend(VllmBackend):
             "--max-num-seqs", str(cfg.batch),
             "--dtype", "bfloat16",
         ]
+        if cfg.prefill_budget is not None:
+            args += ["--max-num-batched-tokens", str(cfg.prefill_budget)]
         if model.spec.revision:
             args += ["--revision", model.spec.revision]
         for k, v in cfg.extra.items():

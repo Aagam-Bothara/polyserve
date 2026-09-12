@@ -155,9 +155,11 @@ def calibrate(
     power_mode: str = "off",
     power_controller: Optional[object] = None,
     power_points: Optional[list] = None,
+    phase_tuning: bool = True,
 ) -> Profile:
     workload = workload or get_workload("default")
-    constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms)
+    constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
+                                             tpot_ceiling_ms=workload.tpot_ceiling_ms)
     feasible = plan.all_feasible
     if not feasible:
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")
@@ -179,7 +181,8 @@ def calibrate(
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
-                          power_points=points)
+                          power_points=points,
+                          prefill_variants=(lambda c: reg[c.backend].prefill_variants(c)) if phase_tuning else None)
     t0 = time.monotonic()
     try:
         winner, notes = search.run(feasible)
@@ -239,12 +242,21 @@ def resolve_profile(
     hw: Optional[HardwareDescriptor] = None,
     on_stage: Optional[Callable[[str], None]] = None,
     power_mode: str = "off",
+    phases: str = "unified",
+    kv_connector: str = "nixl",
 ) -> Profile:
-    """Cached profile if valid, else run the full pipeline and cache the result."""
+    """Cached profile if valid, else run the full pipeline and cache the result.
+
+    `phases` other than "unified" resolves the unified profile first, then measures disaggregated
+    prefill/decode pairs built around it (see polyserve.disagg).
+    """
     say = on_stage or (lambda s: None)
     workload = workload or get_workload("default")
     say("probe")
     hw = hw or probe()
+    if phases != "unified" and not skip_calibration:
+        return _resolve_phased(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
+                               on_stage, power_mode, phases, kv_connector)
     if not recalibrate and not skip_calibration:
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode)
         if cached is not None and (force_backend is None or cached.backend == force_backend):
@@ -262,5 +274,37 @@ def resolve_profile(
     say("calibrate")
     profile = calibrate(hw, spec, objective, plan, reg, workload=workload, constraints=constraints, progress=progress,
                         power_mode=power_mode)
+    profile_cache.save(profile)
+    return profile
+
+
+def _resolve_phased(spec: ModelSpec, objective: str, force_backend: Optional[str], recalibrate: bool,
+                    workload: Workload, constraints: Optional[Constraints], progress: Optional[ProgressFn],
+                    hw: HardwareDescriptor, on_stage: Optional[Callable[[str], None]], power_mode: str,
+                    phases: str, kv_connector: str) -> Profile:
+    from polyserve.disagg import calibrate_disaggregated, check_support
+
+    say = on_stage or (lambda s: None)
+    if not recalibrate:
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, phases)
+        if cached is not None and (force_backend is None or cached.backend == force_backend):
+            say("cache hit")
+            return cached
+    if phases == "disaggregated":
+        # Refuse before spending a unified calibration on a machine that cannot disaggregate.
+        reason = check_support(hw, "vllm", kv_connector)
+        if reason is None and not hw.backend_available("vllm"):
+            reason = f"vLLM is not available ({hw.backends.get('vllm').reason if hw.backends.get('vllm') else 'unknown'})"
+        if reason:
+            raise RuntimeError(f"--phases disaggregated is not possible here: {reason}")
+    # Disaggregation runs on vLLM; `auto` lets the unified search choose freely and falls back if needed.
+    base = resolve_profile(spec, objective, force_backend=force_backend or ("vllm" if phases == "disaggregated" else None),
+                           recalibrate=recalibrate, workload=workload, constraints=constraints, progress=progress,
+                           hw=hw, on_stage=on_stage, power_mode=power_mode if phases == "auto" else "off")
+    _, reg = select(hw, spec, force=base.backend)
+    say("disaggregate")
+    profile = calibrate_disaggregated(hw, spec, objective, base, reg, workload=workload, constraints=constraints,
+                                      phases=phases, connector=kv_connector, progress=progress, power_mode=power_mode,
+                                      log_dir=profile_cache.logs_dir() / spec.safe_id)
     profile_cache.save(profile)
     return profile

@@ -270,7 +270,8 @@ def render_svg(results: List[ComparisonResult], panel_w: int = 300, panel_h: int
         # points
         for label, runtime, ttft, tok, met in pts:
             x, y = sx(ttft), sy(tok)
-            color = RUNTIME_COLOR.get(runtime, "#888")
+            # PolyServe's point always wears the PolyServe colour, as the legend says, whatever it runs on.
+            color = RUNTIME_COLOR["polyserve"] if label == "polyserve" else RUNTIME_COLOR.get(runtime, "#888")
             if label == "polyserve":
                 out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="{color}" stroke="{SURFACE}" stroke-width="2"><title>PolyServe: {tok:.0f} tok/s, TTFT {ttft:.0f} ms</title></circle>')
                 out.append(f'<text x="{x + 9:.1f}" y="{y + 4:.1f}" font-size="10" font-weight="600" fill="{INK}">PolyServe</text>')

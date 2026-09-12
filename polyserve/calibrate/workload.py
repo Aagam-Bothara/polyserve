@@ -46,6 +46,9 @@ class Workload:
     temperature: float = 0.0
     name: str = "default"
     ttft_ceiling_ms: float = 500.0  # default constraint for the `balanced` objective
+    # Per-token decode latency ceiling, applied under every objective. Prefill latency is what
+    # TTFT constrains; this constrains decode, so neither phase can be sacrificed for the other.
+    tpot_ceiling_ms: Optional[float] = 100.0
     prompts: List[str] = field(default_factory=list)
     fitted: bool = False  # prompts were sized with a real tokenizer
 
@@ -101,6 +104,7 @@ class Workload:
             f"{self.name}: {self.n_prompts} prompts x {'' if self.fitted else '~'}{self.prefill_tokens} prefill x "
             f"{self.decode_tokens} decode, concurrency {'/'.join(str(c) for c in self.concurrencies)}, "
             f"TTFT ceiling {self.ttft_ceiling_ms:.0f} ms"
+            + (f", TPOT ceiling {self.tpot_ceiling_ms:.0f} ms" if self.tpot_ceiling_ms else "")
         )
 
     def spec(self) -> Dict[str, object]:
@@ -112,21 +116,22 @@ class Workload:
             "decode_tokens": self.decode_tokens,
             "concurrencies": list(self.concurrencies),
             "ttft_ceiling_ms": self.ttft_ceiling_ms,
+            "tpot_ceiling_ms": self.tpot_ceiling_ms,
             "seed": self.seed,
         }
 
 
 _PRESETS: Dict[str, Workload] = {
     "default": Workload(name="default"),
-    "chat": Workload(name="chat", prefill_tokens=512, decode_tokens=128),
+    "chat": Workload(name="chat", prefill_tokens=512, decode_tokens=128, tpot_ceiling_ms=50.0),
     "long-context": Workload(
         name="long-context", n_prompts=8, prefill_tokens=8192, decode_tokens=256,
         concurrencies=(1, 2, 4), ttft_ceiling_ms=2000.0,
     ),
-    "generation": Workload(name="generation", prefill_tokens=128, decode_tokens=1024),
+    "generation": Workload(name="generation", prefill_tokens=128, decode_tokens=1024, tpot_ceiling_ms=50.0),
     "high-concurrency": Workload(
         name="high-concurrency", n_prompts=256, prefill_tokens=256, decode_tokens=64,
-        concurrencies=(32, 64, 128), ttft_ceiling_ms=1000.0,
+        concurrencies=(32, 64, 128), ttft_ceiling_ms=1000.0, tpot_ceiling_ms=150.0,
     ),
     "rag": Workload(name="rag", prefill_tokens=6144, decode_tokens=64, ttft_ceiling_ms=1500.0),
 }

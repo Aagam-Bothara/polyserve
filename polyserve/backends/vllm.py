@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import sys
 from typing import List, Optional
@@ -122,6 +123,8 @@ class VllmBackend(BaseBackend):
         ]
         if cfg.gpu_memory_utilization is not None:
             args += ["--gpu-memory-utilization", f"{cfg.gpu_memory_utilization:.2f}"]
+        if cfg.prefill_budget is not None:
+            args += ["--max-num-batched-tokens", str(cfg.prefill_budget)]
         if cfg.quant == "fp8":
             args += ["--quantization", "fp8"]
         elif cfg.quant in ("bf16", "fp16"):
@@ -133,6 +136,25 @@ class VllmBackend(BaseBackend):
         for k, v in cfg.extra.items():
             args += [f"--{k.replace('_', '-')}", str(v)]
         return LaunchSpec(args=args)
+
+    # Chunked-prefill token budgets to try. Small budgets interleave prefill with decode and protect
+    # per-token latency; large ones finish long prompts in fewer steps and cut time to first token.
+    PREFILL_BUDGETS = (2048, 8192, 16384)
+
+    def prefill_variants(self, cfg: Config) -> List[Config]:
+        # vLLM requires max_num_batched_tokens >= max_num_seqs.
+        return [cfg.model_copy(update={"prefill_budget": b}) for b in self.PREFILL_BUDGETS
+                if b >= cfg.batch and b != cfg.prefill_budget]
+
+    def disagg_launch_spec(self, cfg: Config, model: PreparedModel, port: int, role: str,
+                           kv_transfer_config: dict, gpu_index: int, side_channel_port: int) -> LaunchSpec:
+        spec = self.launch_spec(cfg, model, port)
+        spec.args += ["--kv-transfer-config", json.dumps(kv_transfer_config)]
+        spec.env.update({
+            "CUDA_VISIBLE_DEVICES": str(gpu_index),
+            "VLLM_NIXL_SIDE_CHANNEL_PORT": str(side_channel_port),
+        })
+        return spec
 
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
         return LlmtraceHooks(

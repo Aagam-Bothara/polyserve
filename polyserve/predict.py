@@ -271,7 +271,7 @@ def observations_from_profile(profile: Profile) -> List[Observation]:
     lp = int(spec.get("prefill_tokens", 256))
     ld = int(spec.get("decode_tokens", 128))
     for t in profile.calibration_table:
-        if not t.ok:
+        if not t.ok or t.disagg is not None:  # a two-GPU pair is not a single-engine observation
             continue
         # Every candidate backend's prepared model is kept, so losing backends are analysable too.
         model = profile.prepared_all.get(t.config.backend) or (
@@ -436,10 +436,12 @@ class Predictor:
         return predict(sit, cfg, self.dev, self.params_for(cfg.backend), concurrency, cfg.backend.endswith("-cpu"))
 
     def best_level(self, model: PreparedModel, cfg: Config, prefill: int, decode: int,
-                   concurrencies: Sequence[int], ttft_ceiling_ms: Optional[float] = None) -> Prediction:
-        """Highest predicted tok/s across levels, honouring a TTFT ceiling when one is given."""
+                   concurrencies: Sequence[int], ttft_ceiling_ms: Optional[float] = None,
+                   tpot_ceiling_ms: Optional[float] = None) -> Prediction:
+        """Highest predicted tok/s across levels, honouring TTFT and TPOT ceilings when given."""
         preds = [self.predict(model, cfg, prefill, decode, c) for c in concurrencies]
-        ok = [p for p in preds if ttft_ceiling_ms is None or p.ttft_ms <= ttft_ceiling_ms]
+        ok = [p for p in preds if (ttft_ceiling_ms is None or p.ttft_ms <= ttft_ceiling_ms)
+              and (tpot_ceiling_ms is None or p.tpot_ms <= tpot_ceiling_ms)]
         pool = ok or preds
         return max(pool, key=lambda p: p.tok_s)
 

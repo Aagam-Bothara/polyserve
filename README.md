@@ -103,6 +103,8 @@ Choose what you want to optimise. PolyServe ranks configurations using the rules
 | `throughput` | Highest tokens per second |
 | `latency` | Lowest TTFT while meeting the minimum tokens per second |
 | `balanced` (default) | Highest tokens per second within the workload's TTFT limit; override it with `--ttft-ceiling` |
+
+Every objective also respects a per-token latency (TPOT) ceiling, the decode-phase counterpart of the TTFT limit. Each workload carries one (50 ms for `chat` and `generation`, 150 ms for `high-concurrency`, 100 ms otherwise) and `--tpot-ceiling` overrides it, so no configuration can win by starving either phase.
 | `efficiency` | Lowest joules per token while meeting the minimum tokens per second |
 
 The minimum throughput defaults to 50% of the best observed tokens per second. Set `--tok-s-floor` to use an absolute value instead. If no configuration meets the constraint, PolyServe chooses the one that comes closest and records that in the profile.
@@ -122,12 +124,24 @@ Both knobs are applied through NVML to the already-running server, so the sweep 
 
 Changing power or clocks needs root and affects the whole machine. PolyServe writes the original state to `~/.polyserve/power-restore.json` before the first change, restores it on exit and on SIGTERM, and `polyserve power reset` undoes it after a hard kill. `polyserve power status` shows the card's limits and whether control is permitted; when it is not, calibration records the reason and skips the stage instead of failing. **This stage is implemented and tested against a simulated NVML, and has not yet run on real hardware.**
 
+### Prefill and decode
+
+Prefill, which processes the prompt, is compute bound. Decode, which generates tokens, is memory-bandwidth bound. They want different settings, so PolyServe tunes them separately, and `--phases` chooses how:
+
+| `--phases` | What happens |
+|---|---|
+| `unified` (default) | One engine. The batch-size sweep tunes decode concurrency; a prefill stage then sweeps the prefill knob on the winner: vLLM's chunked-prefill budget (`--max-num-batched-tokens` 2048, 8192, 16384), SGLang's `--chunked-prefill-size`, or llama.cpp's micro-batch (`-ub` 256, 1024, 2048). |
+| `disaggregated` | Two vLLM engines on two GPUs, joined by KV-cache transfer (NixlConnector by default; `--kv-connector`). The prefill engine gets a large prefill budget and few sequences, the decode engine many sequences and a small budget, and with `--power` only the decode GPU is capped. A router sends each request to the prefill engine for one token, takes the KV handle it returns, and streams the decode engine's output to the client. |
+| `auto` | Calibrates unified, measures the disaggregated pairs, and keeps whichever wins under the objective. On a machine that cannot disaggregate it serves unified and records why. |
+
+Disaggregation needs vLLM, two NVIDIA GPUs and the connector's package (`pip install nixl`). With `--phases disaggregated`, PolyServe checks all three before spending a calibration and refuses with the reason. Each engine's settings, the GPU split and the connector are cached in the profile, shown at `/polyserve/profile`, and restarted together if either engine dies. **The disaggregated mode is tested end to end against fake engines that follow vLLM's KV-transfer handshake, and has not yet run on real GPUs.**
+
 ---
 
 ## CLI
 
 ```
-polyserve serve <model> [--objective X] [--workload W] [--power MODE] [--port N] [--backend NAME] [--skip-calibration]
+polyserve serve <model> [--objective X] [--workload W] [--phases MODE] [--power MODE] [--tpot-ceiling MS] [--port N] [--backend NAME] [--skip-calibration]
 polyserve probe                 # print HardwareDescriptor
 polyserve workloads             # list workload presets
 polyserve plan <model>          # print feasible configs without running them
@@ -238,6 +252,7 @@ These are gaps, not claims. In rough order of how much they would change the con
 3. **Other accelerators.** A100, A30 and a pre-Turing card (GTX 1080) are untested, so the compute-capability branch in the selector has never run on real hardware. SGLang is implemented and has never been benchmarked at all.
 4. **Whether the search helps on GPU at all.** The isolation experiment says it does not, on one card with one model at three workloads. Finding out whether that holds on a card where memory is tight, or is an artifact of a 3B model on 24 GB, is the most interesting open question in this repository.
 5. **Energy tuning on real hardware.** `--power` has only run against a simulated NVML. It needs root on the host, so it has to be measured on a machine you control. Whether the energy-optimal point sits near 70% of full power for these workloads, and whether it differs between prefill-heavy `rag` and decode-heavy `generation`, is still a prediction.
+6. **Disaggregated prefill and decode on real GPUs.** `--phases disaggregated` has only run against fake engines. Whether moving the KV cache between two GPUs on one node beats a single engine at 3B, where the unified result already has memory headroom, is open, and a loss there would not be surprising: the published gains come from larger models and heavier prefill contention.
 
 ## Backend interface
 

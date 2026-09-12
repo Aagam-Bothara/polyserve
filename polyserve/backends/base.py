@@ -243,6 +243,15 @@ class BaseBackend:
         """Download / convert weights for the quants the planner kept. Default: nothing to do."""
         return model
 
+    def prefill_variants(self, cfg: Config) -> List[Config]:
+        """Configs differing from `cfg` only in the prefill knob. Default: this backend has none."""
+        return []
+
+    def disagg_launch_spec(self, cfg: Config, model: PreparedModel, port: int, role: str,
+                           kv_transfer_config: dict, gpu_index: int, side_channel_port: int) -> LaunchSpec:
+        """Launch one engine of a disaggregated prefill/decode pair."""
+        raise NotImplementedError(f"{self.name} does not support disaggregated prefill/decode")
+
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         raise NotImplementedError
 

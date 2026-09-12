@@ -152,6 +152,9 @@ class Config(BaseModel):
     gpu_memory_utilization: Optional[float] = None  # vLLM/SGLang
     n_gpu_layers: Optional[int] = None  # llama.cpp
     n_batch: Optional[int] = None  # llama.cpp logical batch
+    # Prefill knob: chunked-prefill token budget (vLLM max_num_batched_tokens, SGLang
+    # chunked_prefill_size) or llama.cpp micro-batch (-ub). None = the engine's own default.
+    prefill_budget: Optional[int] = None
     kv_dtype: str = "auto"
     extra: Dict[str, Any] = Field(default_factory=dict)
     # Energy tuning, applied through NVML while the backend runs rather than as launch flags.
@@ -166,6 +169,8 @@ class Config(BaseModel):
             parts.append(f"ngl{self.n_gpu_layers}")
         if self.n_batch is not None:
             parts.append(f"nb{self.n_batch}")
+        if self.prefill_budget is not None:
+            parts.append(f"pb{self.prefill_budget}")
         if self.kv_dtype != "auto":
             parts.append(f"kv{self.kv_dtype}")
         if self.power_limit_w is not None:
@@ -232,6 +237,20 @@ class TrialMetrics(BaseModel):
         return self.failed <= self.FAILURE_TOLERANCE * self.requests
 
 
+class DisaggSpec(BaseModel):
+    """Disaggregated serving: one engine per phase, each on its own GPU, joined by KV-cache transfer."""
+
+    prefill: Config
+    decode: Config
+    prefill_gpu: int = 0
+    decode_gpu: int = 1
+    connector: str = "nixl"
+    kv_transfer_config: Dict[str, Any] = Field(default_factory=dict)
+
+    def key(self) -> str:
+        return f"pd[gpu{self.prefill_gpu}:{self.prefill.key()} -> gpu{self.decode_gpu}:{self.decode.key()}]"
+
+
 class MemoryObservation(BaseModel):
     """Planner prediction next to what the backend actually allocated, for one trial."""
 
@@ -247,6 +266,7 @@ class TrialResult(BaseModel):
     error: Optional[str] = None
     started_at: float = Field(default_factory=time.time)
     memory: Optional[MemoryObservation] = None
+    disagg: Optional[DisaggSpec] = None  # set for trials of a disaggregated prefill/decode pair
 
     @property
     def ok(self) -> bool:
@@ -269,12 +289,14 @@ class Profile(BaseModel):
     workload: str = "default"
     workload_spec: Dict[str, Any] = Field(default_factory=dict)
     power_mode: str = "off"  # "off" | "cap" | "clock" | "both"
+    phases: str = "unified"  # requested mode: "unified" | "disaggregated" | "auto"
     backend: str
     backend_version: Optional[str]
     config: Config
     prepared: Optional[PreparedModel] = None
     # Every candidate backend's prepared model, so trials from losing backends stay analysable.
     prepared_all: Dict[str, PreparedModel] = Field(default_factory=dict)
+    disagg: Optional[DisaggSpec] = None  # set when serving disaggregated prefill/decode
     launch_args: List[str]
     launch_env: Dict[str, str] = Field(default_factory=dict)
     calibration_table: List[TrialResult] = Field(default_factory=list)

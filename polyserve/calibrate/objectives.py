@@ -35,6 +35,9 @@ class Constraints:
     tok_s_floor_frac: float = 0.5  # latency / efficiency: floor = frac x best tok/s
     tok_s_floor_abs: Optional[float] = None  # overrides the fraction when set
     noise_tolerance: float = 0.02  # scores within 2% are ties -> prefer larger ctx, then batch
+    # Per-token decode latency ceiling. Applied under every objective when set: TTFT constrains the
+    # prefill phase, this constrains the decode phase.
+    tpot_ceiling_ms: Optional[float] = None
     # A power-capped or clock-locked variant of the leading config may cost up to this much of its
     # score and still be chosen, when it uses less energy. The default keeps savings "free":
     # within run-to-run noise of the uncapped result.
@@ -109,6 +112,12 @@ def _capability(r: TrialResult) -> Tuple[int, int, float]:
     return (c.ctx, c.batch, mem)
 
 
+def _variant_key(r: TrialResult) -> str:
+    """What makes two trials 'the same configuration at different power': everything but power."""
+    d = getattr(r, "disagg", None)
+    return r.config.base_key() + (f"|pd:{d.prefill.key()}" if d is not None else "")
+
+
 def _joules(x: Ranked) -> float:
     j = x.metrics.joules_per_token
     return j if (j is not None and math.isfinite(j)) else math.inf
@@ -127,13 +136,13 @@ def _break_ties(ranked: List[Ranked], cons: Constraints) -> List[Ranked]:
     lead = ranked[0]
     span = abs(lead.score) * max(cons.noise_tolerance, 0.0)
     power_span = abs(lead.score) * max(cons.power_max_loss, cons.noise_tolerance, 0.0)
-    lead_base = lead.result.config.base_key()
+    lead_base = _variant_key(lead.result)
 
     def joins(x: Ranked) -> bool:
         if not x.feasible:
             return False
         gap = abs(x.score - lead.score)
-        return gap <= span or (x.result.config.base_key() == lead_base and gap <= power_span)
+        return gap <= span or (_variant_key(x.result) == lead_base and gap <= power_span)
 
     cluster = [x for x in ranked if joins(x)]
     if len(cluster) < 2:
@@ -150,6 +159,12 @@ def rank(results: Sequence[TrialResult], objective: str, cons: Optional[Constrai
     if not ok:
         return []
     score, violation = _score_and_constraint(objective, cons, ok)
+    if cons.tpot_ceiling_ms is not None:
+        phase_violation, ceiling = violation, cons.tpot_ceiling_ms
+
+        def violation(m: TrialMetrics) -> float:  # noqa: F811  (the decode-phase SLO on top)
+            tpot = m.tpot_ms if (m.tpot_ms is not None and math.isfinite(m.tpot_ms)) else 0.0
+            return phase_violation(m) + max(0.0, tpot - ceiling)
     ranked: List[Ranked] = []
     for r in ok:
         # Score the trial at its best concurrency level for this objective.

@@ -26,16 +26,18 @@ def logs_dir() -> Path:
 
 
 def profile_path(hw_hash: str, model: ModelSpec, objective: str, workload: str = "default",
-                 power: str = "off") -> Path:
+                 power: str = "off", phases: str = "unified") -> Path:
     name = objective if workload == "default" else f"{objective}-{workload}"
     if power != "off":
         name += f"-power-{power}"
+    if phases != "unified":
+        name += f"-phases-{phases}"
     return profiles_dir() / hw_hash / model.safe_id / f"{name}.json"
 
 
 def save(profile: Profile) -> Path:
     path = profile_path(profile.hardware_hash, ModelSpec(hf_id=profile.model_id), profile.objective, profile.workload,
-                        profile.power_mode)
+                        profile.power_mode, profile.phases)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(profile.model_dump_json(indent=2), encoding="utf-8")
@@ -45,9 +47,9 @@ def save(profile: Profile) -> Path:
 
 
 def load(hw: HardwareDescriptor, model: ModelSpec, objective: str, workload: str = "default",
-         power: str = "off") -> Optional[Profile]:
+         power: str = "off", phases: str = "unified") -> Optional[Profile]:
     """Return a cached profile if present and still valid for this hardware + backend version."""
-    path = profile_path(hardware_hash(hw), model, objective, workload, power)
+    path = profile_path(hardware_hash(hw), model, objective, workload, power, phases)
     if not path.exists():
         return None
     try:

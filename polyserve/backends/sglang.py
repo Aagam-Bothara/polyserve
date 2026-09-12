@@ -96,6 +96,8 @@ class SglangBackend(BaseBackend):
         ]
         if cfg.gpu_memory_utilization is not None:
             args += ["--mem-fraction-static", f"{cfg.gpu_memory_utilization:.2f}"]
+        if cfg.prefill_budget is not None:
+            args += ["--chunked-prefill-size", str(cfg.prefill_budget)]
         if cfg.quant == "fp8":
             args += ["--quantization", "fp8"]
         elif cfg.quant in ("bf16", "fp16"):
@@ -107,6 +109,11 @@ class SglangBackend(BaseBackend):
         for k, v in cfg.extra.items():
             args += [f"--{k.replace('_', '-')}", str(v)]
         return LaunchSpec(args=args)
+
+    PREFILL_BUDGETS = (2048, 8192, 16384)
+
+    def prefill_variants(self, cfg: Config) -> List[Config]:
+        return [cfg.model_copy(update={"prefill_budget": b}) for b in self.PREFILL_BUDGETS if b != cfg.prefill_budget]
 
     def workload_hooks(self, hw: HardwareDescriptor, model: PreparedModel) -> LlmtraceHooks:
         return LlmtraceHooks(

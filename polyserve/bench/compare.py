@@ -68,6 +68,7 @@ class ComparisonResult(BaseModel):
     workload: str
     workload_spec: Dict[str, Any]
     ttft_ceiling_ms: float
+    tpot_ceiling_ms: Optional[float] = None
     rows: List[ComparisonRow] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     notes: List[str] = Field(default_factory=list)
@@ -109,6 +110,29 @@ def _score_row(row: ComparisonRow, objective: str, cons: Constraints) -> None:
     row.meets_slo = ranked[0].feasible
 
 
+def _run_disagg_row(profile: Profile, backends: Dict[str, BaseBackend], models: Dict[str, PreparedModel],
+                    hw: HardwareDescriptor, workload: Workload, log_dir: Optional[Path], power: Optional[object],
+                    disagg_runner: Optional[object], objective: str, cons: Constraints,
+                    progress: Optional[Callable[[str, Optional[ComparisonRow]], None]]) -> ComparisonRow:
+    """Measure a disaggregated profile end to end: both engines plus the router."""
+    from polyserve.disagg import DisaggTrialRunner
+
+    spec = profile.disagg
+    backend = backends[profile.backend]
+    runner = disagg_runner or DisaggTrialRunner(backend, models[profile.backend], hw, workload, log_dir=log_dir,
+                                                power_for_gpu=(lambda i: power) if power is not None else None)
+    row = ComparisonRow(label="polyserve", runtime=f"{profile.backend}-disaggregated",
+                        runtime_version=backend.version(hw), config=spec.decode, config_key=spec.key())
+    if progress:
+        progress("polyserve", None)
+    tr = runner.run(spec, "compare:polyserve")  # type: ignore[attr-defined]
+    row.ok, row.error, row.metrics = tr.ok, tr.error, tr.metrics
+    _score_row(row, objective, cons)
+    if progress:
+        progress("polyserve", row)
+    return row
+
+
 def compare(
     hw: HardwareDescriptor,
     spec: ModelSpec,
@@ -123,10 +147,12 @@ def compare(
     log_dir: Optional[Path] = None,
     progress: Optional[Callable[[str, Optional[ComparisonRow]], None]] = None,
     power: Optional[object] = None,
+    disagg_runner: Optional[object] = None,
 ) -> ComparisonResult:
     """Measure PolyServe's winner and every reference config under the same workload."""
     workload = workload or get_workload(profile.workload)
-    cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms)
+    cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
+                                      tpot_ceiling_ms=workload.tpot_ceiling_ms)
     objective = profile.objective
 
     backends: Dict[str, BaseBackend] = dict(reg)
@@ -165,6 +191,7 @@ def compare(
         workload=workload.name,
         workload_spec=workload.spec(),
         ttft_ceiling_ms=cons.ttft_ceiling_ms,
+        tpot_ceiling_ms=cons.tpot_ceiling_ms,
     )
 
     def run_row(label: str, cfg: Config) -> ComparisonRow:
@@ -185,7 +212,11 @@ def compare(
         return row
 
     # PolyServe's winner, re-measured now so it faces the same conditions as the references.
-    ps = run_row("polyserve", profile.config)
+    if profile.disagg is not None:
+        ps = _run_disagg_row(profile, backends, models, hw, workload, log_dir, power, disagg_runner, objective, cons,
+                             progress)
+    else:
+        ps = run_row("polyserve", profile.config)
     ps.calibration_seconds = profile.calibration_seconds
     ps.calibration_trials = profile.calibration_trials
     result.rows.append(ps)
@@ -214,7 +245,8 @@ def _f(x: Optional[float], nd: int = 0) -> str:
 def to_markdown(result: ComparisonResult) -> str:
     lines = [
         f"**{result.gpu or result.cpu}** · {result.model_id} · workload `{result.workload}` · objective "
-        f"`{result.objective}` (TTFT ≤ {result.ttft_ceiling_ms:.0f} ms)",
+        f"`{result.objective}` (TTFT ≤ {result.ttft_ceiling_ms:.0f} ms"
+        f"{f', TPOT ≤ {result.tpot_ceiling_ms:.0f} ms' if result.tpot_ceiling_ms else ''})",
         "",
         "| runtime / config | tok/s | TTFT p50 | TTFT p95 | TPOT | peak mem | W | J/tok | SLO | calib |",
         "|---|---|---|---|---|---|---|---|---|---|",

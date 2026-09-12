@@ -2,7 +2,10 @@
 
 1. quant / precision  - one short run per feasible (backend, quant); keep the top 2.
 2. memory config      - largest safe gpu_memory_utilization / offload layers / context.
-3. batch / concurrency - sweep max_num_seqs (vLLM/SGLang) or n_parallel/n_batch (llama.cpp).
+3. batch / concurrency - sweep max_num_seqs (vLLM/SGLang) or n_parallel/n_batch (llama.cpp): the
+                        decode knob.
+3b. prefill           - on the leading config, sweep the prefill knob: the chunked-prefill token
+                        budget (vLLM, SGLang) or the micro-batch (llama.cpp). Default on.
 4. power (optional)   - on the leading config, sweep GPU power caps and/or locked SM clocks
                         through NVML without relaunching, and keep the setting that saves energy.
 
@@ -258,6 +261,8 @@ class StagedSearch:
     prune_below: float = 0.4  # skip a quant whose predicted best tok/s < this fraction of the best predicted
     # Stage 4: power settings to try on the leading config (the default setting first). Empty = off.
     power_points: List[PowerSetting] = field(default_factory=list)
+    # Stage 3b: configs differing from the leader only in the prefill knob. None = stage off.
+    prefill_variants: Optional[Callable[[Config], List[Config]]] = None
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
@@ -273,8 +278,12 @@ class StagedSearch:
                 return None
             wl = self.workload or Workload()
             ceiling = self.constraints.ttft_ceiling_ms if self.objective == "balanced" else None
+            kwargs = {}
+            if self.constraints.tpot_ceiling_ms is not None:
+                kwargs["tpot_ceiling_ms"] = self.constraints.tpot_ceiling_ms
             p = self.predictor.best_level(  # type: ignore[attr-defined]
-                self.models[cfg.backend], cfg, wl.prefill_tokens, wl.decode_tokens, wl.concurrencies, ceiling
+                self.models[cfg.backend], cfg, wl.prefill_tokens, wl.decode_tokens, wl.concurrencies, ceiling,
+                **kwargs,
             )
             return float(p.tok_s)
         except Exception as exc:
@@ -395,6 +404,18 @@ class StagedSearch:
             for c in variants:
                 self._run(c, "batch")
 
+    def stage_prefill(self, base: Config) -> None:
+        """Tune the prefill knob on the leading config; stage 3 already tuned the decode knob."""
+        if self.prefill_variants is None:
+            return
+        try:
+            variants = self.prefill_variants(base)
+        except Exception as exc:
+            logger.warning("no prefill variants for %s: %s", base.key(), exc)
+            return
+        for v in variants:
+            self._run(v, "prefill")
+
     def stage_power(self, base: Config) -> None:
         """Measure the leading config under each power setting and let the objective choose."""
         settings = list(self.power_points)
@@ -444,6 +465,10 @@ class StagedSearch:
             ]
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
+        if self.prefill_variants is not None:
+            leader, _ = pick(self.results, self.objective, self.constraints)
+            if leader is not None:
+                self.stage_prefill(leader.config)
         if self.power_points:
             leader, _ = pick(self.results, self.objective, self.constraints)
             if leader is not None:
