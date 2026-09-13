@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Turn strategy benchmark outputs into the markdown tables used in the README.
+"""Turn strategy benchmark outputs into the markdown tables behind docs/benchmarks.md.
 
     cd benchmarks/strategies && python ../summarize_strategies.py \
         --results results results-llamacpp results-layout results-disagg results-real results-real/v2 \

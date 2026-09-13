@@ -43,10 +43,11 @@ def load_pick(results_dir: Path, model: str, workload: str, objective: str,
               hw_hash: Optional[str] = None) -> Optional[Config]:
     """PolyServe's configuration for this workload, from a `polyserve compare` results file.
 
-    A file from this machine is preferred over one from another.
+    A file from this machine is preferred over one from another; ties go by file name, so the
+    choice never depends on the order the filesystem lists the directory in.
     """
     name = results_path("*", ModelSpec(hf_id=model), workload, objective, results_dir).name
-    files = sorted(results_dir.glob(name), key=lambda f: not (hw_hash and f.name.startswith(hw_hash)))
+    files = sorted(results_dir.glob(name), key=lambda f: (not (hw_hash and f.name.startswith(hw_hash)), f.name))
     for f in files:
         data = json.loads(f.read_text(encoding="utf-8"))
         for row in data.get("rows", []):
