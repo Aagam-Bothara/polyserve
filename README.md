@@ -38,7 +38,7 @@ curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
 
 The first launch calibrates, which takes 20–45 minutes, and caches the result per machine, model, objective and workload. Later launches serve at once. `--skip-calibration` serves the first candidate with default settings. For llama.cpp, build `llama-server` with CUDA and put it on `PATH` or in `LLAMA_SERVER`.
 
-With Docker (the image builds on the official vLLM image and has not yet been built in CI):
+With Docker. The image builds on the official vLLM image; CI builds the same Dockerfile on a slim Python base to check its steps, but not the full vLLM image:
 
 ```bash
 docker build -t polyserve .
@@ -106,7 +106,7 @@ What is still unmeasured, in order of how much it could change the conclusions: 
 
 ## Non-goals and roadmap
 
-PolyServe sits above vLLM, SGLang and llama.cpp and launches them; it is not a replacement, a compiler or a kernel library, and it supports only the hardware listed above. Planned: AMD ROCm and Apple Silicon backends, Windows, and re-tuning under live traffic instead of a one-time calibration.
+PolyServe sits above the inference engines (vLLM and llama.cpp; SGLang is implemented but not yet benchmarked) and launches them; it is not a replacement, a compiler or a kernel library, and it supports only the hardware listed above. Planned: AMD ROCm and Apple Silicon backends, Windows, and re-tuning under live traffic instead of a one-time calibration.
 
 ## Development
 

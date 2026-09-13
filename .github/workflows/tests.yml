@@ -21,3 +21,12 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check polyserve tests benchmarks
       - run: pytest
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # The real image builds on vllm/vllm-openai (tens of GB); a slim base checks the Dockerfile's own steps.
+      - run: docker build --build-arg BASE_IMAGE=python:3.12-slim -t polyserve-ci .
+      - run: docker run --rm polyserve-ci --help
+      - run: docker run --rm polyserve-ci workloads
