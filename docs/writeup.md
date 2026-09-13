@@ -123,9 +123,10 @@ matters: pruning is safe when the ranking is right even if the magnitudes are of
 The search uses it conservatively. With fitted parameters, stage 1 skips a (backend, quant) group
 whose predicted best is below 40% of the best predicted group, and stage 3 tries batch settings in
 predicted order so an interrupted calibration already holds the likely winner. With priors only,
-nothing is pruned; every prediction carries a fitted/prior flag. Measurements prune as well: once a
-backend's best measured quant is below half of another backend's best, its remaining quants are
-skipped. On ShareGPT prompts on an A40 that saved three llama.cpp trials of several minutes each. The queueing term is what made
+nothing is pruned; every prediction carries a fitted/prior flag. Measurements prune as well: once even a
+backend's best raw throughput is below half of what another backend reached within the objective's
+constraints, its remaining quants are skipped. Only a feasible result can lead, and a backend's raw
+throughput bounds any score it could reach, so the rule cannot drop a backend that would have won. On ShareGPT prompts on an A40 that saved three llama.cpp trials of several minutes each. The queueing term is what made
 the llama.cpp result on the RTX 3090 explicable before it was measured: with 8 clients on 4 slots
 the median request waits a full wave, which is the 952 ms TTFT the trial recorded, and 8 slots
 remove the wait.

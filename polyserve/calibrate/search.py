@@ -278,9 +278,10 @@ class StagedSearch:
     models: Dict[str, PreparedModel] = field(default_factory=dict)
     workload: Optional[Workload] = None
     prune_below: float = 0.4  # skip a quant whose predicted best tok/s < this fraction of the best predicted
-    # Skip a backend's remaining quants once its best measured tok/s is below this fraction of the
-    # leader's (throughput and balanced objectives). On an A40 with ShareGPT prompts llama.cpp reached
-    # 470 tok/s against vLLM's 1677 and its other three GGUF quants still took 25 minutes to lose.
+    # Skip a backend's remaining quants once even its best raw tok/s is below this fraction of the
+    # throughput a feasible leader reached (throughput and balanced objectives). On an A40 with ShareGPT
+    # prompts llama.cpp reached 470 tok/s against vLLM's 1677 and its other three GGUF quants still took
+    # 25 minutes to lose.
     drop_backend_below: float = 0.5
     # Stage 4: power settings to try on the leading config (the default setting first). Empty = off.
     power_points: List[PowerSetting] = field(default_factory=list)
@@ -347,22 +348,33 @@ class StagedSearch:
     # ---- stages
 
     def _losing_backends(self, results: Sequence[TrialResult], already: Dict[str, str]) -> Dict[str, str]:
-        """Backends whose best measured tok/s so far is under drop_backend_below of another backend's best."""
+        """Backends that cannot catch the leader: even their best raw tok/s is under drop_backend_below of
+        the best throughput another backend reached within the objective's constraints.
+
+        Only a feasible result can lead. Under `balanced`, a configuration that is fast but breaks the TTFT
+        ceiling must not push out a slower backend that meets it. A backend's raw tok/s bounds any score it
+        could reach, so dropping on that bound cannot drop a backend that would have won."""
         if self.objective not in ("throughput", "balanced") or not self.drop_backend_below:
             return {}
-        best: Dict[str, float] = {}
-        for r in results:
-            if r.ok and r.metrics.tok_s:
-                best[r.config.backend] = max(best.get(r.config.backend, 0.0), r.metrics.tok_s)
+        ok = [r for r in results if r.ok]
+        within: Dict[str, float] = {}  # best constrained tok/s per backend (score is -tok/s for both objectives)
+        for x in rank(ok, self.objective, self.constraints):
+            if x.feasible:
+                b = x.result.config.backend
+                within[b] = max(within.get(b, 0.0), -x.score)
+        bound: Dict[str, float] = {}  # best raw tok/s per backend
+        for r in ok:
+            if r.metrics.tok_s:
+                bound[r.config.backend] = max(bound.get(r.config.backend, 0.0), r.metrics.tok_s)
         out: Dict[str, str] = {}
-        for backend, tok in best.items():
-            rivals = {b: t for b, t in best.items() if b != backend}
+        for backend, tok in bound.items():
+            rivals = {b: t for b, t in within.items() if b != backend}
             if backend in already or not rivals:
                 continue
             leader, lead_tok = max(rivals.items(), key=lambda kv: kv[1])
             if tok < self.drop_backend_below * lead_tok:
-                out[backend] = (f"{backend} reached {tok:.0f} tok/s, under {self.drop_backend_below:.0%} of "
-                                f"{leader}'s {lead_tok:.0f}")
+                out[backend] = (f"{backend} reached at most {tok:.0f} tok/s, under {self.drop_backend_below:.0%} of "
+                                f"{leader}'s {lead_tok:.0f} within the objective's constraints")
         return out
 
     def stage_quant(self, feasible: Sequence[Config]) -> List[Tuple[str, str]]:

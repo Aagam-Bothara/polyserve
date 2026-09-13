@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Dict
+from typing import Dict, Optional
 
 from polyserve.calibrate.search import StagedSearch
 from polyserve.calibrate.workload import get_workload
@@ -15,12 +15,13 @@ GGUF = [Config(backend="llamacpp-cuda", quant=q, ctx=4096, batch=4, n_gpu_layers
 
 
 class QuantRunner:
-    def __init__(self, tok_by_quant: Dict[str, float]):
+    def __init__(self, tok_by_quant: Dict[str, float], ttft_by_quant: Optional[Dict[str, float]] = None):
         self.tok = tok_by_quant
+        self.ttft = ttft_by_quant or {}
 
     def run(self, cfg: Config, stage: str) -> TrialResult:
-        m = TrialMetrics(tok_s=self.tok[cfg.quant], ttft_ms=150, tpot_ms=7, requests=16, output_tokens=2048,
-                         concurrency=8)
+        m = TrialMetrics(tok_s=self.tok[cfg.quant], ttft_ms=self.ttft.get(cfg.quant, 150), tpot_ms=7, requests=16,
+                         output_tokens=2048, concurrency=8)
         return TrialResult(config=cfg, stage=stage, metrics=m.model_copy(update={"by_concurrency": {"8": m}}))
 
 
@@ -37,6 +38,17 @@ def test_a_backend_far_behind_the_leader_is_not_measured_further():
     fresh = StagedSearch(objective="balanced", runner=QuantRunner(
         {"bf16": 1677.4, "Q4_K_M": 470.5, "Q5_K_M": 467.9, "Q6_K": 423.8, "Q8_0": 396.4}))
     assert fresh.stage_quant([VLLM, *GGUF]) == [("vllm", "bf16")]  # and it is not carried into later stages
+
+
+def test_a_leader_that_breaks_the_latency_ceiling_prunes_nothing():
+    """balanced: vLLM is 3.5x faster but misses the 500 ms TTFT ceiling, llama.cpp meets it. The fast
+    configuration is not a feasible leader, so llama.cpp's other quants are still measured."""
+    tok = {"bf16": 1677.4, "Q4_K_M": 470.5, "Q5_K_M": 467.9, "Q6_K": 423.8, "Q8_0": 396.4}
+    search = StagedSearch(objective="balanced", runner=QuantRunner(tok, ttft_by_quant={"bf16": 5000.0}))
+    kept = search.stage_quant([VLLM, *GGUF])
+    assert len([r for r in search.results if r.stage == "quant"]) == 5
+    assert not any("skipped" in n for n in search.notes)
+    assert kept[0][0] == "llamacpp-cuda"  # the feasible backend leads
 
 
 def test_a_competitive_backend_keeps_all_its_quants():

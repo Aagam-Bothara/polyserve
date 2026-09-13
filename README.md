@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml/badge.svg)](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml)
 
-**PolyServe measures which serving settings pay off on your GPU and your traffic, then serves the winner.** Give it a model: it probes the machine, benchmarks vLLM and llama.cpp configurations on your workload, tells you what each option costs in answer quality, and serves the pick behind an OpenAI-compatible API.
+**PolyServe measures which serving settings pay off on your GPU and your traffic, then serves the winner.** Give it a model: it probes the machine, benchmarks vLLM and llama.cpp configurations on your workload, and serves the pick behind an OpenAI-compatible API. Calibration measures speed and latency only; what a quantization costs in answer quality is measured separately, with `benchmarks/task_quality.py`.
 
 The claim is deliberately narrow. Against stock settings it wins clearly. Against an expert who already passes the right flags it mostly ties, except where the best settings depend on what the traffic contains. That is where the search earns its keep.
 
@@ -22,7 +22,7 @@ Qwen2.5 models on rented GPUs, objective `balanced`, PolyServe's default `--quan
 \* Synthetic prompts, which flatter n-gram speculation; treat it as an upper bound.
 
 - **The right precision depends on the card and the latency target.** On the L4, fp8 beat 4-bit because 4-bit's slower prefill broke the first-token target; on the A40, where vLLM 0.29 offers no fp8, 4-bit ran at twice bf16.
-- **Quality is measured, not assumed.** On all 1,319 GSM8K problems, paired against bf16: on Qwen2.5-3B fp8 cost 2.4 points and 4-bit 4–5 (all significant); on 7B none cost a measurable amount. So `--quant auto` leaves 4-bit out, and `--quant auto,awq,gptq` puts it back (it doubled throughput on real text).
+- **Quality was measured, in a separate experiment.** `benchmarks/task_quality.py` graded all 1,319 GSM8K problems at each precision, paired against bf16: on Qwen2.5-3B fp8 cost 2.4 points and 4-bit 4–5 (all significant); on 7B none cost a measurable amount. That is why `--quant auto` leaves 4-bit out; `--quant auto,awq,gptq` puts it back (it doubled throughput on real text). PolyServe does not grade answers while it calibrates, so `--quant` is where you decide what it may trade.
 - **Some strategies only pay together, and some get in each other's way.** On `extract` the fp8 cache helped on its own but slowed the draft model. The search finds that by undoing each change it adopted.
 - **Speculative decoding depends on load and content.** n-gram lookup made one user 80% faster on code edits and collapsed from four users up. PolyServe measures at your workload's concurrency.
 
@@ -91,7 +91,8 @@ The full CLI is in [docs/usage.md](docs/usage.md#cli).
 
 - Against someone who already picks the right precision and flags, the rest of the search is worth a few percent, except where content decides, as on `extract`.
 - Never run on real hardware: SGLang, vLLM-CPU, pre-Turing GPUs, and `--power`, which has only run against a simulated NVML.
-- Measured on one model family (Qwen2.5) and three machines, with quality graded on one task.
+- Calibration never evaluates answer quality. The quality results above come from a separate script, run by hand, on one task (GSM8K) and one model family.
+- Measured on one model family (Qwen2.5) and three machines.
 - Calibration takes tens of minutes per workload.
 
 What is still unmeasured, in order of how much it could change the conclusions: [docs/benchmarks.md](docs/benchmarks.md#not-yet-measured).
