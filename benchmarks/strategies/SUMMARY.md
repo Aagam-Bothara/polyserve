@@ -1,22 +1,30 @@
 ## PolyServe against stock settings
 
-| model | workload | PolyServe pick | tok/s | TTFT p50 | stock vLLM bf16 (gain) | stock vLLM fp8 (gain) | stock llama.cpp (gain) |
-|---|---|---|---|---|---|---|---|
-| Qwen2.5-3B-Instruct | chat-system | `vllm/gptq/ctx16384/b256/gmu0.95` | 733 | 309 ms | 432 (+69%) | 548 (+34%) | 155 (+372%) |
-| Qwen2.5-3B-Instruct | chat | `vllm/gptq/ctx4096/b64/gmu0.95` | 783 | 282 ms | 469 (+67%) | 575 (+36%) | 156 (+402%) |
-| Qwen2.5-3B-Instruct | generation | `vllm/gptq/ctx8192/b256/gmu0.95` | 1157 | 98 ms | 547 (+111%) | 837 (+38%) | 188 (+514%) |
-| Qwen2.5-3B-Instruct | high-concurrency | `vllm/awq/ctx8192/b256/gmu0.95` | 1786 | 778 ms | 1686 (+6%) | 1118 (+60%) | 165 (+981%), missed SLO |
-| Qwen2.5-3B-Instruct | rag-shared | `vllm/awq/ctx32768/b64/gmu0.95` | 480 | 409 ms | 334 (+44%) | 378 (+27%) | failed |
-| Qwen2.5-7B-Instruct | chat | `vllm/gptq/ctx8192/b256/gmu0.95` | 495 | 475 ms | 233 (+113%) | 203 (+144%) | 96 (+413%) |
-| Qwen2.5-3B-Instruct | rag | `vllm/bf16/ctx32768/b64/gmu0.95` | 106 | 1288 ms | 105 (+1%) | 45 (+134%) | - |
-| Qwen2.5-3B-Instruct | high-concurrency | `vllm/gptq/ctx8192/b256/gmu0.95 x2` | 3152 | 803 ms | 1715 (+84%) | 1346 (+134%) | - |
-| Qwen2.5-3B-Instruct | chat-system | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64` | 455 | 171 ms | - | - | 157 (+190%) |
+| GPU | model | workload | PolyServe pick | tok/s | TTFT p50 | stock vLLM bf16 (gain) | stock vLLM fp8 (gain) | stock llama.cpp (gain) |
+|---|---|---|---|---|---|---|---|---|
+| A40 | Qwen2.5-3B-Instruct | chat-system | `vllm/gptq/ctx16384/b256/gmu0.95` | 733 | 309 ms | 432 (+69%) | 548 (+34%) | 155 (+372%) |
+| A40 | Qwen2.5-3B-Instruct | chat | `vllm/gptq/ctx4096/b64/gmu0.95` | 783 | 282 ms | 469 (+67%) | 575 (+36%) | 156 (+402%) |
+| A40 | Qwen2.5-3B-Instruct | generation | `vllm/gptq/ctx8192/b256/gmu0.95` | 1157 | 98 ms | 547 (+111%) | 837 (+38%) | 188 (+514%) |
+| A40 | Qwen2.5-3B-Instruct | high-concurrency | `vllm/awq/ctx8192/b256/gmu0.95` | 1786 | 778 ms | 1686 (+6%) | 1118 (+60%) | 165 (+981%), missed SLO |
+| A40 | Qwen2.5-3B-Instruct | rag-shared | `vllm/awq/ctx32768/b64/gmu0.95` | 480 | 409 ms | 334 (+44%) | 378 (+27%) | failed |
+| A40 | Qwen2.5-7B-Instruct | chat | `vllm/gptq/ctx8192/b256/gmu0.95` | 495 | 475 ms | 233 (+113%) | 203 (+144%) | 96 (+413%) |
+| CPU | Qwen2.5-0.5B-Instruct | default | `llamacpp-cpu/Q4_K_M/ctx8192/b1/ngl0/nb2048/sd=ngram:64` | 92 | 475 ms | - | - | 68 (+37%) |
+| A40 | Qwen2.5-3B-Instruct | rag | `vllm/bf16/ctx32768/b64/gmu0.95` | 106 | 1288 ms | 105 (+1%) | 45 (+134%) | - |
+| L4 | Qwen2.5-7B-Instruct | chat | `vllm/fp8/ctx8192/b64/gmu0.95` | 195 | 487 ms | 17 (+1036%), missed SLO | 195 (+0%) | 49 (+301%) |
+| L4 | Qwen2.5-7B-Instruct | sharegpt | `vllm/fp8/ctx8192/b64/gmu0.95/pb16384/kvfp8` | 738 | 985 ms | 410 (+80%) | 701 (+5%) | failed |
+| A40 | Qwen2.5-3B-Instruct | high-concurrency | `vllm/gptq/ctx8192/b256/gmu0.95 x2` | 3152 | 803 ms | 1715 (+84%) | 1346 (+134%) | - |
+| A40 | Qwen2.5-3B-Instruct | chat-system | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64` | 455 | 171 ms | - | - | 157 (+190%) |
+| A40 | Qwen2.5-3B-Instruct | code-edit | `vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 483 | 64 ms | 459 (+5%) | - | 187 (+158%) |
+| A40 | Qwen2.5-3B-Instruct | extract | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 628 | 177 ms | 439 (+43%) | - | 175 (+259%) |
+| A40 | Qwen2.5-3B-Instruct | sharegpt | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2` | 1891 | 380 ms | 1714 (+10%) | - | 190 (+897%) |
+| A40 | Qwen2.5-3B-Instruct | extract (v2) | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 638 | 178 ms | 439 (+45%) | - | 176 (+261%) |
+| A40 | Qwen2.5-3B-Instruct | extract (v3) | `vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 731 | 171 ms | 439 (+66%) | - | 174 (+319%) |
 
 - Qwen2.5-3B-Instruct / high-concurrency: PolyServe serves 2 replicas on 2 GPUs; the stock rows use one GPU, so this row is not a like-for-like throughput comparison
 
 ## What each strategy is worth
 
-**Qwen2.5-3B-Instruct / chat-system**
+**Qwen2.5-3B-Instruct / chat-system** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -28,7 +36,7 @@
 | -prefix | `vllm/gptq/ctx16384/b256/gmu0.95/nopc` | 318 | -56.3% | 426 ms | 9.1 ms | 1588 ms | met |
 | +spec:ngram:4 | `vllm/gptq/ctx16384/b256/gmu0.95/sd=ngram:4` | 586 | -19.7% | 347 ms | 11.1 ms | 1751 ms | met |
 
-**Qwen2.5-3B-Instruct / chat**
+**Qwen2.5-3B-Instruct / chat** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -48,7 +56,7 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | 16 | 1215 | 1015 | 1641 ms | 1998 ms |
 | 64 | 1685 | 1625 | 4561 ms | 4739 ms |
 
-**Qwen2.5-3B-Instruct / generation**
+**Qwen2.5-3B-Instruct / generation** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -59,7 +67,7 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | +kv:fp8_e5m2 | `vllm/gptq/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 1127 | -3.8% | 119 ms | 7.0 ms | 7242 ms | met |
 | +spec:ngram:4 | `vllm/gptq/ctx8192/b256/gmu0.95/sd=ngram:4` | 1029 | -12.1% | 105 ms | 7.6 ms | 7929 ms | met |
 
-**Qwen2.5-3B-Instruct / high-concurrency**
+**Qwen2.5-3B-Instruct / high-concurrency** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -70,7 +78,7 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | +kv:fp8_e5m2 | `vllm/awq/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 1656 | -4.5% | 881 ms | 24.4 ms | 2415 ms | met |
 | +spec:ngram:4 | `vllm/awq/ctx8192/b256/gmu0.95/sd=ngram:4` | 1736 | +0.1% | 585 ms | 26.1 ms | 2229 ms | met |
 
-**Qwen2.5-3B-Instruct / rag-shared**
+**Qwen2.5-3B-Instruct / rag-shared** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -82,7 +90,7 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | -prefix | `vllm/awq/ctx32768/b64/gmu0.95/nopc` | 95 | -80.3% | 1377 ms | 20.7 ms | 2678 ms | met |
 | +spec:ngram:4 | `vllm/awq/ctx32768/b64/gmu0.95/sd=ngram:4` | 438 | -9.4% | 396 ms | 11.8 ms | 1139 ms | met |
 
-**Qwen2.5-7B-Instruct / chat**
+**Qwen2.5-7B-Instruct / chat** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -93,7 +101,31 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | +kv:fp8_e5m2 | `vllm/gptq/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 490 | -1.5% | 480 ms | 12.1 ms | 2020 ms | met |
 | +spec:ngram:4 | `vllm/gptq/ctx8192/b256/gmu0.95/sd=ngram:4` | 300 | -39.6% | 351 ms | 11.0 ms | 1752 ms | met |
 
-**Qwen2.5-3B-Instruct / chat-system**
+**Qwen2.5-7B-Instruct / chat** (L4)
+
+| row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
+|---|---|---|---|---|---|---|---|
+| vllm-default | `vllm/bf16/ctx32768/b256/gmu0.90` | 17 | -91.2% | 157 ms | 57.5 ms | 7460 ms | missed |
+| vllm-fp8-default | `vllm/fp8/ctx32768/b256/gmu0.90` | 194 | -0.0% | 491 ms | 37.2 ms | 5216 ms | met |
+| polyserve | `vllm/fp8/ctx8192/b64/gmu0.95` | 194 |  | 489 ms | 37.2 ms | 5214 ms | met |
+| +awq | `vllm/awq/ctx8192/b64/gmu0.95` | 48 | -75.1% | 156 ms | 19.6 ms | 2640 ms | met |
+| +gptq | `vllm/gptq/ctx8192/b64/gmu0.95` | 49 | -74.8% | 153 ms | 19.4 ms | 2614 ms | met |
+| +kv:fp8 | `vllm/fp8/ctx8192/b64/gmu0.95/kvfp8` | 197 | +1.3% | 488 ms | 36.7 ms | 5144 ms | met |
+| +spec:ngram:4 | `vllm/fp8/ctx8192/b64/gmu0.95/sd=ngram:4` | 105 | -45.8% | 290 ms | 35.9 ms | 4851 ms | met |
+
+**Qwen2.5-7B-Instruct / sharegpt** (L4)
+
+| row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
+|---|---|---|---|---|---|---|---|
+| vllm-default | `vllm/bf16/ctx32768/b256/gmu0.90` | 410 | -44.2% | 632 ms | 69.3 ms | 32710 ms | met |
+| vllm-fp8-default | `vllm/fp8/ctx32768/b256/gmu0.90` | 698 | -5.0% | 634 ms | 40.7 ms | 19540 ms | met |
+| polyserve | `vllm/fp8/ctx8192/b64/gmu0.95/pb16384/kvfp8` | 734 |  | 999 ms | 43.7 ms | 21925 ms | met |
+| +awq | `vllm/awq/ctx8192/b64/gmu0.95/pb16384/kvfp8` | 373 | -49.2% | 449 ms | 20.4 ms | 10893 ms | met |
+| +gptq | `vllm/gptq/ctx8192/b64/gmu0.95/pb16384/kvfp8` | 376 | -48.8% | 443 ms | 20.3 ms | 10806 ms | met |
+| -kv | `vllm/fp8/ctx8192/b64/gmu0.95/pb16384` | 681 | -7.3% | 836 ms | 40.2 ms | 19045 ms | met |
+| +spec:ngram:4 | `vllm/fp8/ctx8192/b64/gmu0.95/pb16384/kvfp8/sd=ngram:4` | 725 | -1.2% | 965 ms | 43.1 ms | 21590 ms | met |
+
+**Qwen2.5-3B-Instruct / chat-system** (A40)
 
 | row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
 |---|---|---|---|---|---|---|---|
@@ -103,6 +135,54 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | +prefix:cache_reuse | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64/cache_reuse=256` | 417 | -2.5% | 223 ms | 6.8 ms | 1090 ms | met |
 | +prefix:kv_unified | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64/kv_unified=True` | 482 | +12.7% | 160 ms | 6.0 ms | 922 ms | met |
 | -spec | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256` | 397 | -7.0% | 382 ms | 16.3 ms | 2448 ms | met |
+
+**Qwen2.5-3B-Instruct / code-edit** (A40)
+
+| row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
+|---|---|---|---|---|---|---|---|
+| vllm-default | `vllm/bf16/ctx32768/b256/gmu0.90` | 472 | -8.8% | 60 ms | 13.6 ms | 3175 ms | met |
+| vllm-fp8-default | `vllm/fp8/ctx32768/b256/gmu0.90` | failed | | | | | failed to start (rc=1) |
+| polyserve | `vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 517 |  | 67 ms | 13.8 ms | 5051 ms | met |
+| +awq | `vllm/awq/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 1121 | +116.6% | 49 ms | 6.0 ms | 2201 ms | met |
+| +gptq | `vllm/gptq/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 1150 | +122.2% | 68 ms | 6.0 ms | 2459 ms | met |
+| -kv | `vllm/bf16/ctx8192/b256/gmu0.95` | 460 | -11.1% | 61 ms | 13.6 ms | 3094 ms | met |
+| -kv (FlashInfer kept) | `vllm/bf16/ctx8192/b256/gmu0.95/attention_backend=FLASHINFER` | 485 | -6.3% | 62 ms | 13.8 ms | 3193 ms | met |
+| +spec:ngram:4 | `vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2/sd=ngram:4` | 143 | -72.3% | 40 ms | 7.2 ms | 2643 ms | met |
+| +spec:draft:Qwen/Qwen2.5-0.5B-Instruct:4 | `vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 462 | -10.7% | 123 ms | 15.5 ms | 5887 ms | met |
+
+**Qwen2.5-3B-Instruct / extract** (A40)
+
+| row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
+|---|---|---|---|---|---|---|---|
+| vllm-default | `vllm/bf16/ctx32768/b256/gmu0.90` | 439 | -27.9% | 109 ms | 14.8 ms | 3557 ms | met |
+| vllm-fp8-default | `vllm/fp8/ctx32768/b256/gmu0.90` | failed | | | | | failed to start (rc=1) |
+| polyserve | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 609 |  | 189 ms | 11.7 ms | 4669 ms | met |
+| +awq | `vllm/awq/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 728 | +19.5% | 174 ms | 8.9 ms | 3504 ms | met |
+| +gptq | `vllm/gptq/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 747 | +22.6% | 195 ms | 8.9 ms | 3616 ms | met |
+| -kv | `vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 728 | +19.5% | 165 ms | 9.4 ms | 2378 ms | met |
+| -kv (FlashInfer kept) | `vllm/bf16/ctx8192/b256/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4/attention_backend=FLASHINFER` | 702 | +15.3% | 174 ms | 9.6 ms | 2229 ms | met |
+| -spec | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2` | 537 | -11.9% | 276 ms | 14.1 ms | 5678 ms | met |
+
+**Qwen2.5-3B-Instruct / sharegpt** (A40)
+
+| row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
+|---|---|---|---|---|---|---|---|
+| vllm-default | `vllm/bf16/ctx32768/b256/gmu0.90` | 1680 | -7.8% | 251 ms | 15.7 ms | 7029 ms | met |
+| vllm-fp8-default | `vllm/fp8/ctx32768/b256/gmu0.90` | failed | | | | | failed to start (rc=1) |
+| polyserve | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2` | 1822 |  | 369 ms | 15.6 ms | 7703 ms | met |
+| +awq | `vllm/awq/ctx8192/b512/gmu0.95/kvfp8_e5m2` | 3818 | +109.6% | 336 ms | 7.4 ms | 3929 ms | met |
+| +gptq | `vllm/gptq/ctx8192/b512/gmu0.95/kvfp8_e5m2` | 3817 | +109.5% | 332 ms | 7.6 ms | 3998 ms | met |
+| -kv | `vllm/bf16/ctx8192/b256/gmu0.95` | 1676 | -8.0% | 247 ms | 15.6 ms | 6945 ms | met |
+| +spec:ngram:4 | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=ngram:4` | 244 | -86.6% | 350 ms | 86.2 ms | 42941 ms | met |
+| +spec:draft:Qwen/Qwen2.5-0.5B-Instruct:4 | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 1323 | -27.4% | 283 ms | 17.0 ms | 8586 ms | met |
+
+**Qwen2.5-3B-Instruct / sharegpt** (A40, flashinfer)
+
+| row | config | tok/s | vs pick | TTFT p50 | TPOT | request latency | SLO |
+|---|---|---|---|---|---|---|---|
+| polyserve | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2` | 1832 |  | 354 ms | 15.7 ms | 7876 ms | met |
+| -kv | `vllm/bf16/ctx8192/b256/gmu0.95` | 1697 | -7.4% | 282 ms | 15.7 ms | 7161 ms | met |
+| -kv (FlashInfer kept) | `vllm/bf16/ctx8192/b256/gmu0.95/attention_backend=FLASHINFER` | 1705 | -6.9% | 314 ms | 15.8 ms | 7279 ms | met |
 
 
 ## Quality
@@ -124,3 +204,18 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 | Q6_K | 4.332 | +0.9% |
 | Q5_K_M | 4.454 | +3.8% |
 | Q4_K_M | 4.726 | +10.1% |
+
+## Task accuracy (GSM8K)
+
+| model | weights | accuracy | 95% CI | vs reference | lost / gained | p (McNemar) |
+|---|---|---|---|---|---|---|
+| Qwen2.5-3B-Instruct | bf16 | 87.2% | 85.3%–88.9% | reference | | |
+| Qwen2.5-3B-Instruct | fp8 | 84.8% | 82.8%–86.7% | -2.4 pts vs bf16 | 65 / 34 | 0.002 |
+| Qwen2.5-3B-Instruct | awq | 82.2% | 80.0%–84.2% | -5.0 pts vs bf16 | 119 / 53 | <0.001 |
+| Qwen2.5-3B-Instruct | gptq | 83.1% | 81.0%–85.0% | -4.1 pts vs bf16 | 103 / 49 | <0.001 |
+| Qwen2.5-7B-Instruct | bf16 | 91.4% | 89.7%–92.8% | reference | | |
+| Qwen2.5-7B-Instruct | fp8 | 91.3% | 89.6%–92.7% | -0.1 pts vs bf16 | 31 / 30 | 1.000 |
+| Qwen2.5-7B-Instruct | bf16 | 91.6% | 90.0%–93.0% | reference | | |
+| Qwen2.5-7B-Instruct | fp8 | 91.4% | 89.7%–92.8% | -0.2 pts vs bf16 | 23 / 20 | 0.761 |
+| Qwen2.5-7B-Instruct | awq | 90.9% | 89.2%–92.3% | -0.7 pts vs bf16 | 41 / 32 | 0.349 |
+| Qwen2.5-7B-Instruct | gptq | 90.5% | 88.8%–92.0% | -1.1 pts vs bf16 | 46 / 32 | 0.141 |

@@ -80,6 +80,15 @@ def _rank_repo(repo_id: str, model_author: str, downloads: int) -> Tuple[int, in
     return (tier, -downloads)
 
 
+def list_hub_models(api, query: str, limit: int) -> list:
+    """Hub search, most-downloaded first. huggingface_hub 1.x removed `direction` (its downloads sort
+    is already descending) and raises TypeError for it; older releases need direction=-1."""
+    try:
+        return list(api.list_models(search=query, sort="downloads", direction=-1, limit=limit))
+    except TypeError:
+        return list(api.list_models(search=query, sort="downloads", limit=limit))
+
+
 def search_hub_gguf(
     spec: ModelSpec,
     quants: Sequence[str] = GGUF_QUANTS,
@@ -95,7 +104,7 @@ def search_hub_gguf(
     seen: Dict[str, Tuple[Tuple[int, int], object]] = {}
     for q in queries:
         try:
-            for m in api.list_models(search=q, sort="downloads", direction=-1, limit=limit):
+            for m in list_hub_models(api, q, limit):
                 rid = m.id
                 if rid in seen:
                     continue

@@ -1,9 +1,12 @@
 #!/usr/bin/env python
 """Turn strategy benchmark outputs into the markdown tables used in the README.
 
-    python benchmarks/summarize_strategies.py --results benchmarks/strategies/results \
-        --ablation benchmarks/strategies/ablation --quality benchmarks/strategies/quality-*.json \
-        --gguf-quality benchmarks/strategies/quality-gguf.txt --out benchmarks/strategies/SUMMARY.md
+    cd benchmarks/strategies && python ../summarize_strategies.py \
+        --results results results-llamacpp results-layout results-disagg results-real results-real/v2 \
+            results-real/v3 results-l4 results-cpu \
+        --ablation ablation ablation-llamacpp ablation-real ablation-real/flashinfer ablation-l4 \
+        --quality quality-3b.json quality-7b.json --gguf-quality quality-gguf-3b.txt \
+        --task-quality task-quality-3b.json task-quality-7b.json task-quality-7b-l4.json --out SUMMARY.md
 """
 
 from __future__ import annotations
@@ -12,7 +15,13 @@ import argparse
 import sys
 from pathlib import Path
 
-from polyserve.bench.ablation import ablation_report, compare_table, gguf_quality_table, quality_table
+from polyserve.bench.ablation import (
+    ablation_report,
+    compare_table,
+    gguf_quality_table,
+    quality_table,
+    task_quality_table,
+)
 
 
 def main() -> int:
@@ -21,6 +30,7 @@ def main() -> int:
     ap.add_argument("--ablation", type=Path, nargs="*", default=[], help="directories of ablation JSON")
     ap.add_argument("--quality", type=Path, nargs="*", default=[], help="quality_check.py JSON files")
     ap.add_argument("--gguf-quality", type=Path, default=None, help="llama-perplexity summary lines")
+    ap.add_argument("--task-quality", type=Path, nargs="*", default=[], help="task_quality.py JSON files")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -35,6 +45,8 @@ def main() -> int:
         parts += ["## Quality", "", quality_table(args.quality), ""]
     if args.gguf_quality:
         parts += [gguf_quality_table(args.gguf_quality), ""]
+    if args.task_quality:
+        parts += ["## Task accuracy (GSM8K)", "", task_quality_table(args.task_quality), ""]
     text = "\n".join(parts)
     if args.out:
         args.out.write_text(text, encoding="utf-8")

@@ -345,7 +345,8 @@ async def _drive(
                 "max_tokens": workload.decode_tokens,
                 "temperature": workload.temperature,
                 "stream": True,
-                "ignore_eos": True,  # vLLM/SGLang honour this; llama.cpp ignores unknown fields
+                # Fixed-length answers for synthetic prompts; real-text workloads stop when the model does.
+                "ignore_eos": not workload.natural_stop,
             }
             if hooks.stream_usage:
                 body["stream_options"] = {"include_usage": True}
@@ -389,7 +390,8 @@ def _level_workload(workload: Workload, k: int, counter: TokenCounter) -> Worklo
     if k == 0:
         return workload
     level = replace(workload, seed=workload.seed + 7_919 * k, prompts=[], fitted=False,
-                    prefix_text=workload.prefix_text, prefix_fixed=True)
+                    prefix_text=workload.prefix_text, prefix_fixed=True,
+                    sample_offset=workload.sample_offset + k * workload.n_prompts).ensure_prompts()
     if counter.available:
         level.fit_prompts(counter)
     return level
@@ -471,6 +473,7 @@ def run_trial(
     """
     if counter is None:
         counter = TokenCounter.for_model(hooks.tokenizer_id)
+    workload.ensure_prompts()
     if counter.available and not workload.fitted:
         workload.fit_prompts(counter)
     prompt_tokens = workload.measured_prompt_tokens(counter) or 0
@@ -497,6 +500,9 @@ def run_trial(
 
     for k, c in enumerate(workload.concurrencies):
         level = _level_workload(workload, k, counter)
+        n = level.level_requests(c)
+        if n < len(level.prompts):
+            level = replace(level, prompts=level.prompts[:n], n_prompts=n)
         with Telemetry(hooks, pid=pid) as tel:
             if clients > 1:
                 outcomes, wall = _drive_clients(base_url, hooks, level, c, request_timeout, clients)

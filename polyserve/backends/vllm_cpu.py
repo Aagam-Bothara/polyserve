@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-import sys
 from typing import List
 
 from polyserve.backends.base import LaunchSpec, LlmtraceHooks, ctx_grid, render_extra
+from polyserve.backends.vllm import vllm_serve_head
 from polyserve.backends.vllm import PAGED_KV_FRACTION, VllmBackend
 from polyserve.hfconfig import load_arch
 from polyserve.memory import MemoryModel, kv_cache_bytes
@@ -57,8 +57,7 @@ class VllmCpuBackend(VllmBackend):
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         args = [
-            sys.executable, "-m", self.server_module,
-            "--model", model.hf_path or model.spec.hf_id,
+            *vllm_serve_head(model.hf_path or model.spec.hf_id),
             "--host", "127.0.0.1",
             "--port", str(port),
             "--max-model-len", str(cfg.ctx),

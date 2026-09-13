@@ -84,4 +84,4 @@ def vllm_config(spec: str) -> Dict[str, object]:
     kind, model_id, k = parse(spec)
     if kind == "ngram":
         return {"method": "ngram", "num_speculative_tokens": k, "prompt_lookup_max": 4, "prompt_lookup_min": 2}
-    return {"model": model_id, "num_speculative_tokens": k}
+    return {"method": "draft_model", "model": model_id, "num_speculative_tokens": k}

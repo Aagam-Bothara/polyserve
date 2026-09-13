@@ -14,10 +14,12 @@ from polyserve.pipeline import default_profile, prepare_and_plan, select
 
 def test_presets_are_sane():
     assert set(WORKLOAD_NAMES) == {"default", "chat", "long-context", "generation", "high-concurrency", "rag",
-                                   "chat-system", "rag-shared"}
+                                   "chat-system", "rag-shared", "sharegpt", "extract", "code-edit"}
     for name in WORKLOAD_NAMES:
         w = get_workload(name)
-        assert w.name == name and len(w.prompts) == w.n_prompts
+        assert w.name == name
+        # Real-text presets download their prompts when a trial needs them, not before.
+        assert len(w.prompts) == (w.n_prompts if w.source == "synthetic" else 0)
         assert w.n_prompts >= max(w.concurrencies)  # every concurrency level can actually be reached
         assert w.min_ctx > w.prefill_tokens + w.decode_tokens
     assert get_workload("default").spec() == Workload().spec()

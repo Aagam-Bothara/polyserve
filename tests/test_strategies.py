@@ -322,7 +322,7 @@ def test_vllm_speculative_variants_and_flags(prepared_vllm, monkeypatch):
     assert [c.spec_decode for c in variants] == ["ngram:4", "draft:meta-llama/Llama-3.2-1B-Instruct:4"]
     args = be.launch_spec(variants[1], prepared_vllm, 1).args
     assert json.loads(args[args.index("--speculative-config") + 1]) == {
-        "model": "meta-llama/Llama-3.2-1B-Instruct", "num_speculative_tokens": 4}
+        "method": "draft_model", "model": "meta-llama/Llama-3.2-1B-Instruct", "num_speculative_tokens": 4}
     ngram = json.loads(be.launch_spec(variants[0], prepared_vllm, 1).args[-1])
     assert ngram["method"] == "ngram" and ngram["num_speculative_tokens"] == 4
     assert get_backend("vllm-cpu").spec_variants(base, prepared_vllm) == []

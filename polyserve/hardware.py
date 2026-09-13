@@ -250,13 +250,52 @@ def _cpu_flags() -> Tuple[str, set]:
     return name, flags
 
 
+def _cpu_quota(root: str = "/sys/fs/cgroup") -> Optional[float]:
+    """CPUs this process may use under a cgroup quota (containers), or None when unlimited or unknown."""
+    try:  # cgroup v2: "<quota|max> <period>"
+        with open(os.path.join(root, "cpu.max"), encoding="utf-8") as fh:
+            quota, period = fh.read().split()[:2]
+        return None if quota == "max" else int(quota) / int(period)
+    except (OSError, ValueError):
+        pass
+    try:  # cgroup v1
+        with open(os.path.join(root, "cpu", "cpu.cfs_quota_us"), encoding="utf-8") as fh:
+            quota_us = int(fh.read())
+        with open(os.path.join(root, "cpu", "cpu.cfs_period_us"), encoding="utf-8") as fh:
+            period_us = int(fh.read())
+        return None if quota_us <= 0 or period_us <= 0 else quota_us / period_us
+    except (OSError, ValueError):
+        return None
+
+
+def _usable_cpus() -> Optional[int]:
+    """Whole CPUs this process may run on: its affinity mask, capped by a cgroup quota."""
+    limits: List[int] = []
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            limits.append(len(os.sched_getaffinity(0)))
+        except OSError:
+            pass
+    quota = _cpu_quota()
+    if quota is not None:
+        limits.append(max(1, int(quota)))
+    return min(limits) if limits else None
+
+
 def probe_cpu() -> CPUInfo:
     name, flags = _cpu_flags()
     vm = psutil.virtual_memory()
+    physical = psutil.cpu_count(logical=False) or 1
+    logical = psutil.cpu_count(logical=True) or 1
+    # A container sees the host's cores but may use only a quota of them: a RunPod pod showed 96 CPUs
+    # under a 7.65-CPU quota, and llama.cpp given 48 threads ran throttled at 27 tok/s on a 0.5B model.
+    usable = _usable_cpus()
+    if usable is not None:
+        physical, logical = min(physical, usable), min(logical, usable)
     return CPUInfo(
         model_name=name,
-        physical_cores=psutil.cpu_count(logical=False) or 1,
-        logical_cores=psutil.cpu_count(logical=True) or 1,
+        physical_cores=physical,
+        logical_cores=logical,
         avx2="avx2" in flags,
         avx512=any(f.startswith("avx512") for f in flags),
         ram_total_bytes=int(vm.total),

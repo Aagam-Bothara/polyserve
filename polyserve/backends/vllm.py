@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import importlib.util
 import json
 import logging
+import re
+import shutil
 import sys
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from polyserve import speculative
@@ -49,10 +53,56 @@ def vllm_registry_archs() -> Optional[set]:
         return None
 
 
+# vLLM 0.29 cannot run fp8 weights on Ampere. With torch.compile the engine fails in Inductor
+# ("auto_functionalized was not removed"); without it (-O0 or --enforce-eager) a CUTLASS sm80 kernel
+# fails. Measured on an A40 with vLLM 0.29.0 and torch 2.13; vLLM 0.11 ran fp8 there through Marlin.
+FP8_ON_AMPERE_BROKEN_FROM = (0, 29)
+
+
+@functools.lru_cache(maxsize=1)
+def _vllm_version() -> Tuple[int, int]:
+    """Installed vLLM's (major, minor), or (0, 0) when it is not installed."""
+    try:
+        from importlib.metadata import version
+
+        m = re.match(r"(\d+)\.(\d+)", version("vllm"))
+        return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    except Exception:
+        return (0, 0)
+
+
+@functools.lru_cache(maxsize=1)
+def _serve_cli() -> Optional[str]:
+    """The `vllm` command line next to this interpreter, or on PATH."""
+    sibling = Path(sys.executable).with_name("vllm.exe" if sys.platform == "win32" else "vllm")
+    return str(sibling) if sibling.exists() else shutil.which("vllm")
+
+
+def vllm_serve_head(model_path: str) -> List[str]:
+    """How a vLLM server command line starts: `vllm serve <model>` where that CLI is installed.
+    vLLM 0.29 deprecates the `vllm.entrypoints.openai.api_server` module used before, which remains
+    the fallback without the CLI."""
+    cli = _serve_cli()
+    if cli:
+        return [cli, "serve", model_path]
+    return [sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--model", model_path]
+
+
+@functools.lru_cache(maxsize=1)
+def _attention_backend_flag() -> bool:
+    """Whether the installed vLLM takes --attention-backend (its AttentionConfig). vLLM 0.11 had no
+    such flag and read VLLM_ATTENTION_BACKEND instead. Read from source: importing vLLM costs seconds."""
+    spec = importlib.util.find_spec("vllm")
+    locs = list(spec.submodule_search_locations or []) if spec else []
+    try:
+        return bool(locs) and "AttentionConfig" in (Path(locs[0]) / "engine" / "arg_utils.py").read_text("utf-8")
+    except OSError:
+        return False
+
+
 class VllmBackend(BaseBackend):
     name = "vllm"
     runtime_workspace_bytes = int(1.5 * GiB)  # CUDA context + CUDA graphs + activation workspace
-    server_module = "vllm.entrypoints.openai.api_server"
 
     # ---- capability
 
@@ -74,7 +124,8 @@ class VllmBackend(BaseBackend):
     def precisions(self, hw: HardwareDescriptor) -> List[str]:
         cc = hw.gpu.cc if hw.gpu else (0, 0)
         out = ["bf16" if cc >= (8, 0) else "fp16"]
-        if cc >= (8, 0):  # fp8 online weight quantisation (Marlin on Ampere, native on Ada/Hopper)
+        # fp8 online weight quantisation: native on Ada/Hopper, Marlin on Ampere up to vLLM 0.28.
+        if cc >= (8, 9) or (cc >= (8, 0) and _vllm_version() < FP8_ON_AMPERE_BROKEN_FROM):
             out.append("fp8")
         if cc >= (7, 5):  # pre-quantized 4-bit checkpoints: Marlin kernels on Ampere+, plain AWQ/GPTQ on Turing
             out += list(INT4_METHODS)
@@ -147,8 +198,7 @@ class VllmBackend(BaseBackend):
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         args = [
-            sys.executable, "-m", self.server_module,
-            "--model", model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id,
+            *vllm_serve_head(model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id),
             # A stable name even when a 4-bit checkpoint repository is what gets loaded.
             "--served-model-name", model.spec.hf_id,
             "--host", "127.0.0.1",
@@ -175,8 +225,15 @@ class VllmBackend(BaseBackend):
             args += ["--tensor-parallel-size", str(cfg.tp)]
         if model.spec.revision and cfg.quant not in INT4_METHODS:
             args += ["--revision", model.spec.revision]
-        args += render_extra(cfg.extra)
-        env = {"VLLM_ATTENTION_BACKEND": "FLASHINFER"} if cfg.kv_dtype == AMPERE_FP8_KV else {}
+        args += render_extra(cfg.extra, skip=("attention_backend",))
+        env = {}
+        # The fp8 cache on Ampere needs FlashInfer (see AMPERE_FP8_KV); extra["attention_backend"] forces a
+        # backend, so an ablation can keep FlashInfer while removing the fp8 cache.
+        attention = cfg.extra.get("attention_backend") or ("FLASHINFER" if cfg.kv_dtype == AMPERE_FP8_KV else None)
+        if attention:
+            env["VLLM_ATTENTION_BACKEND"] = str(attention)  # vLLM 0.11
+            if _attention_backend_flag():
+                args += ["--attention-backend", str(attention)]
         # PCIe-only GPUs: peer-to-peer can hang at start-up inside containers. Measured on a pair of
         # A40s: NCCL's P2P path hangs at init, and with only that disabled the engine's custom
         # all-reduce (CUDA IPC, also P2P) hangs next. With both off it starts in under a minute.

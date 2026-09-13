@@ -1,0 +1,451 @@
+{
+  "hardware_hash": "60feb5e0e75ca027",
+  "gpu": "NVIDIA A40",
+  "model_id": "Qwen/Qwen2.5-3B-Instruct",
+  "workload": "sharegpt",
+  "objective": "balanced",
+  "workload_spec": {
+    "name": "sharegpt",
+    "n_prompts": 64,
+    "prefill_tokens": 1024,
+    "decode_tokens": 512,
+    "concurrencies": [
+      1,
+      8,
+      32
+    ],
+    "ttft_ceiling_ms": 1000.0,
+    "tpot_ceiling_ms": 100.0,
+    "shared_prefix_tokens": 0,
+    "seed": 0,
+    "source": "sharegpt",
+    "natural_stop": true,
+    "requests_per_slot": 2
+  },
+  "rows": [
+    {
+      "label": "vllm-default",
+      "strategy": "baseline",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 32768,
+        "batch": 256,
+        "gpu_memory_utilization": 0.9,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx32768/b256/gmu0.90",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 1679.9836893472711,
+      "ttft_ms": 251.48822786286473,
+      "ttft_p95_ms": 529.0413973852992,
+      "tpot_ms": 15.721617161981882,
+      "e2e_ms": 7029.470426822304,
+      "joules_per_token": 0.1717655583125751,
+      "peak_mem_mb": 42256.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 77.68955810467718,
+          "ttft_ms": 54.26918622106314,
+          "tpot_ms": 12.739649139702252,
+          "e2e_ms": 5567.352351427213
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 530.7333712977153,
+          "ttft_ms": 106.63149133324623,
+          "tpot_ms": 13.467506362976456,
+          "e2e_ms": 6400.165558581682
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 1679.9836893472711,
+          "ttft_ms": 251.48822786286473,
+          "tpot_ms": 15.721617161981882,
+          "e2e_ms": 7029.470426822304
+        }
+      }
+    },
+    {
+      "label": "vllm-fp8-default",
+      "strategy": "baseline",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "fp8",
+        "ctx": 32768,
+        "batch": 256,
+        "gpu_memory_utilization": 0.9,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/fp8/ctx32768/b256/gmu0.90",
+      "ok": false,
+      "error": "failed to start (rc=1)\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/tracing/otel.py\", line 178, in sync_wrapper\n(APIServer pid=48202)     return func(*args, **kwargs)\n(APIServer pid=48202)            ^^^^^^^^^^^^^^^^^^^^^\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/v1/engine/core_client.py\", line 139, in make_async_mp_client\n(APIServer pid=48202)     return AsyncMPClient(*client_args)\n(APIServer pid=48202)            ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/tracing/otel.py\", line 178, in sync_wrapper\n(APIServer pid=48202)     return func(*args, **kwargs)\n(APIServer pid=48202)            ^^^^^^^^^^^^^^^^^^^^^\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/v1/engine/core_client.py\", line 991, in __init__\n(APIServer pid=48202)     super().__init__(\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/v1/engine/core_client.py\", line 609, in __init__\n(APIServer pid=48202)     with launch_core_engines(\n(APIServer pid=48202)   File \"/usr/lib/python3.11/contextlib.py\", line 144, in __exit__\n(APIServer pid=48202)     next(self.gen)\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/v1/engine/utils.py\", line 1240, in launch_core_engines\n(APIServer pid=48202)     wait_for_engine_startup(\n(APIServer pid=48202)   File \"/usr/local/lib/python3.11/dist-packages/vllm/v1/engine/utils.py\", line 1320, in wait_for_engine_startup\n(APIServer pid=48202)     raise RuntimeError(\n(APIServer pid=48202) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}"
+    },
+    {
+      "label": "polyserve",
+      "strategy": "pick",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 512,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 1822.0990011226052,
+      "ttft_ms": 369.22069219872355,
+      "ttft_p95_ms": 509.18704457581043,
+      "tpot_ms": 15.579467727405381,
+      "e2e_ms": 7703.011695691566,
+      "joules_per_token": 0.15819969607880047,
+      "peak_mem_mb": 45566.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 77.53033700069686,
+          "ttft_ms": 32.52311050891876,
+          "tpot_ms": 12.812470157200506,
+          "e2e_ms": 6017.548232691205
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 573.2154548675845,
+          "ttft_ms": 119.1116962581873,
+          "tpot_ms": 13.651229561340253,
+          "e2e_ms": 7094.890002103057
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 1822.0990011226052,
+          "ttft_ms": 369.22069219872355,
+          "tpot_ms": 15.579467727405381,
+          "e2e_ms": 7703.011695691566
+        }
+      }
+    },
+    {
+      "label": "+awq",
+      "strategy": "weights",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "awq",
+        "ctx": 8192,
+        "batch": 512,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/awq/ctx8192/b512/gmu0.95/kvfp8_e5m2",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 3818.40953768218,
+      "ttft_ms": 335.52550338208675,
+      "ttft_p95_ms": 545.7589412108064,
+      "tpot_ms": 7.354734691246117,
+      "e2e_ms": 3928.658153244467,
+      "joules_per_token": 0.0764100875302145,
+      "peak_mem_mb": 45134.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 174.81728120367987,
+          "ttft_ms": 26.281834580004215,
+          "tpot_ms": 5.625951398250491,
+          "e2e_ms": 2643.052478691264
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 1202.442036520326,
+          "ttft_ms": 97.60310687124729,
+          "tpot_ms": 5.9039040460602985,
+          "e2e_ms": 2920.7762228967063
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 3818.40953768218,
+          "ttft_ms": 335.52550338208675,
+          "tpot_ms": 7.354734691246117,
+          "e2e_ms": 3928.658153244467
+        }
+      }
+    },
+    {
+      "label": "+gptq",
+      "strategy": "weights",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "gptq",
+        "ctx": 8192,
+        "batch": 512,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/gptq/ctx8192/b512/gmu0.95/kvfp8_e5m2",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 3816.5564706460236,
+      "ttft_ms": 331.6969540901482,
+      "ttft_p95_ms": 538.2145708426833,
+      "tpot_ms": 7.5757786731349315,
+      "e2e_ms": 3997.900345720384,
+      "joules_per_token": 0.0753154613936087,
+      "peak_mem_mb": 45128.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 176.4501736002742,
+          "ttft_ms": 24.856201373040676,
+          "tpot_ms": 5.5878956757992535,
+          "e2e_ms": 2880.270891706459
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 1294.329891039453,
+          "ttft_ms": 144.5683278143406,
+          "tpot_ms": 5.816024297656065,
+          "e2e_ms": 3116.5567439165898
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 3816.5564706460236,
+          "ttft_ms": 331.6969540901482,
+          "tpot_ms": 7.5757786731349315,
+          "e2e_ms": 3997.900345720384
+        }
+      }
+    },
+    {
+      "label": "-kv",
+      "strategy": "kv",
+      "note": "batch 256: an unquantized cache does not fit at batch 512",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 256,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx8192/b256/gmu0.95",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 1675.7011366482602,
+      "ttft_ms": 247.3987713456154,
+      "ttft_p95_ms": 718.95707026124,
+      "tpot_ms": 15.625448821296736,
+      "e2e_ms": 6944.612624736096,
+      "joules_per_token": 0.17547423411383112,
+      "peak_mem_mb": 44532.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 77.72560439123131,
+          "ttft_ms": 49.44804264232516,
+          "tpot_ms": 12.735113303505798,
+          "e2e_ms": 5560.56832473446
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 530.9159180151037,
+          "ttft_ms": 106.11978592351079,
+          "tpot_ms": 13.456009047721246,
+          "e2e_ms": 6394.281014036746
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 1675.7011366482602,
+          "ttft_ms": 247.3987713456154,
+          "tpot_ms": 15.625448821296736,
+          "e2e_ms": 6944.612624736096
+        }
+      }
+    },
+    {
+      "label": "+spec:ngram:4",
+      "strategy": "spec",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 512,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": "ngram:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=ngram:4",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 244.00700268158712,
+      "ttft_ms": 349.50482519343495,
+      "ttft_p95_ms": 481.48937057703733,
+      "tpot_ms": 86.17110758946872,
+      "e2e_ms": 42940.921174844436,
+      "joules_per_token": 0.5051814254826373,
+      "peak_mem_mb": 44721.4375,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 121.67241797741812,
+          "ttft_ms": 31.065606512129307,
+          "tpot_ms": 8.13358291799527,
+          "e2e_ms": 4187.326477607712
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 103.27514548667769,
+          "ttft_ms": 246.84580182656646,
+          "tpot_ms": 66.77791994356565,
+          "e2e_ms": 34211.76533312265
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 244.00700268158712,
+          "ttft_ms": 349.50482519343495,
+          "tpot_ms": 86.17110758946872,
+          "e2e_ms": 42940.921174844436
+        }
+      }
+    },
+    {
+      "label": "+spec:draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+      "strategy": "spec",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 512,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+      "ok": true,
+      "concurrency": 32,
+      "tok_s": 1322.9629356296953,
+      "ttft_ms": 283.3713060244918,
+      "ttft_p95_ms": 706.9680280983448,
+      "tpot_ms": 16.963059772830242,
+      "e2e_ms": 8585.728873589092,
+      "joules_per_token": 0.1986101351690736,
+      "peak_mem_mb": 45148.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 83.38095094772845,
+          "ttft_ms": 72.65929039567709,
+          "tpot_ms": 11.828616960885444,
+          "e2e_ms": 6117.082557408139
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 551.995477019014,
+          "ttft_ms": 230.67394271492958,
+          "tpot_ms": 12.31440784477712,
+          "e2e_ms": 6276.278544010197
+        },
+        "32": {
+          "ok": true,
+          "tok_s": 1322.9629356296953,
+          "ttft_ms": 283.3713060244918,
+          "tpot_ms": 16.963059772830242,
+          "e2e_ms": 8585.728873589092
+        }
+      }
+    }
+  ]
+}

@@ -67,6 +67,7 @@ class SearchOptions:
     speculative: bool = True  # n-gram and draft-model speculative decoding
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
     phase_tuning: bool = True  # the prefill-knob stage
+    combine: bool = True  # combinations of the strategies that were promising on their own
 
     def key(self) -> Dict[str, str]:
         """Non-default options, recorded in the profile and in its cache path."""
@@ -81,6 +82,8 @@ class SearchOptions:
             out["prefix"] = "off"
         if not self.phase_tuning:
             out["prefill"] = "off"
+        if not self.combine:
+            out["combine"] = "off"
         return out
 
     def allows(self, quant: str) -> bool:
@@ -93,6 +96,25 @@ def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optio
     profile calibrated when `auto` still picked 4-bit checkpoints must not outlive that default."""
     return (cached is not None and (force_backend is None or cached.backend == force_backend)
             and opts.allows(cached.config.quant))
+
+
+def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
+    """Whether a combined config can run: it must fit in memory, and on vLLM and SGLang the prefill
+    budget must cover the batch (each stage keeps that true on its own; a combination may not)."""
+    from polyserve.memory import estimate
+
+    def fn(c: Config) -> bool:
+        pm = plan.prepared.get(c.backend)
+        if pm is None:
+            return False
+        if c.prefill_budget is not None and c.prefill_budget < c.batch and not c.backend.startswith("llamacpp"):
+            return False
+        try:
+            return estimate(hw, pm, c, reg[c.backend].memory_model(hw)).feasible
+        except Exception:
+            return False
+
+    return fn
 
 
 def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
@@ -290,7 +312,8 @@ def calibrate(
 
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
-                          power_points=points, variant_stages=stages,
+                          power_points=points, variant_stages=stages, combine=opts.combine,
+                          feasible_fn=combination_fits(hw, reg, plan),
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))
     t0 = time.monotonic()

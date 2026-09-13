@@ -1,0 +1,71 @@
+{
+  "model": "Qwen/Qwen2.5-7B-Instruct",
+  "task": "gsm8k",
+  "split": "test",
+  "problems": 1319,
+  "instruction": "Solve the problem step by step. End your answer with a line of the form 'The answer is N'.",
+  "max_tokens": 512,
+  "accuracy": {
+    "bf16": {
+      "correct": 1205,
+      "n": 1319,
+      "accuracy": 0.913570887035633,
+      "ci95": [
+        0.8971796017195914,
+        0.9275601101249711
+      ],
+      "unparsed": 0
+    },
+    "fp8": {
+      "correct": 1204,
+      "n": 1319,
+      "accuracy": 0.9128127369219106,
+      "ci95": [
+        0.8963640552709643,
+        0.9268637597599511
+      ],
+      "unparsed": 0,
+      "vs_bf16": {
+        "lost": 31,
+        "gained": 30
+      }
+    }
+  },
+  "checkpoints": {},
+  "samples": {
+    "bf16": [
+      {
+        "question": "Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?",
+        "reference": 18.0,
+        "answer": "Step 1: Calculate the total number of eggs laid by Janet's ducks per day.\n- Janet's ducks lay 16 eggs per day.\n\nStep 2: Calculate the total number of eggs Janet uses for her own consumption and baking.\n- Janet eats 3 eggs for breakfast every morning.\n- She bakes muffins for her friends with 4 eggs every day.\n- Therefore, the total number of eggs used is \\(3 + 4 = 7\\) eggs per day.\n\nStep 3: Calculate the number of eggs remaining after Janet's use.\n- The number of eggs remaining is \\(16 - 7 = 9\\) eggs per day.\n\nStep 4: Calculate the amount of money Janet makes from selling the remaining eggs.\n- Janet sells the remaining 9 eggs at the farmers' market for $2 per egg.\n- Therefore, the total amount of money she makes is \\(9 \\times 2 = 18\\) dollars per day.\n\nThe answer is 18."
+      },
+      {
+        "question": "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
+        "reference": 3.0,
+        "answer": "To solve this problem, let's break it down step by step.\n\n1. **Identify the amount of blue fiber needed:**\n   - The problem states that a robe takes 2 bolts of blue fiber.\n\n2. **Determine the amount of white fiber needed:**\n   - The problem also states that the amount of white fiber needed is half the amount of blue fiber.\n   - Since 2 bolts of blue fiber are needed, half of that amount is \\( \\frac{2}{2} = 1 \\) bolt of white fiber.\n\n3. **Calculate the total amount of fiber needed:**\n   - To find the total amount of fiber, we add the amount of blue fiber and the amount of white fiber together.\n   - Total fiber = Blue fiber + White fiber\n   - Total fiber = 2 bolts + 1 bolt = 3 bolts\n\nThe answer is 3."
+      },
+      {
+        "question": "Josh decides to try flipping a house.  He buys a house for $80,000 and then puts in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?",
+        "reference": 70000.0,
+        "answer": "To solve this problem, we need to follow these steps:\n\n1. **Calculate the total cost of the house and repairs:**\n   - The initial cost of the house is $80,000.\n   - The cost of repairs is $50,000.\n   - Total cost = $80,000 + $50,000 = $130,000.\n\n2. **Determine the new value of the house after repairs:**\n   - The repairs increased the value of the house by 150%.\n   - To find the increase in value, we calculate 150% of the original cost of the house.\n   - Increase in value = 150% of $80,000 = 1.5 * $80,000 = $120,000.\n   - New value of the house = Original cost of the house + Increase in value = $80,000 + $120,000 = $200,000.\n\n3. **Calculate the profit:**\n   - Profit is the difference between the new value of the house and the total cost.\n   - Profit = New value of the house - Total cost = $200,000 - $130,000 = $70,000.\n\nThe answer is 70000."
+      }
+    ],
+    "fp8": [
+      {
+        "question": "Janet\u2019s ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?",
+        "reference": 18.0,
+        "answer": "Step 1: Calculate the total number of eggs laid by Janet's ducks per day.\n- Janet's ducks lay 16 eggs per day.\n\nStep 2: Calculate the total number of eggs Janet uses for her own consumption and baking.\n- Janet eats 3 eggs for breakfast every day.\n- She uses 4 eggs to bake muffins for her friends every day.\n- Total eggs used = 3 (for breakfast) + 4 (for baking) = 7 eggs.\n\nStep 3: Calculate the number of eggs remaining for sale at the farmers' market.\n- Eggs remaining = Total eggs laid - Eggs used\n- Eggs remaining = 16 - 7 = 9 eggs.\n\nStep 4: Calculate the revenue from selling the remaining eggs at the farmers' market.\n- Janet sells the remaining 9 eggs at $2 per egg.\n- Revenue = 9 eggs * $2/egg = $18.\n\nThe answer is 18."
+      },
+      {
+        "question": "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?",
+        "reference": 3.0,
+        "answer": "To solve this problem, let's break it down step by step.\n\n1. Identify the amount of blue fiber needed: The problem states that a robe takes 2 bolts of blue fiber.\n2. Determine the amount of white fiber needed: The problem also states that the amount of white fiber needed is half that of the blue fiber. Therefore, the amount of white fiber needed is \\( \\frac{1}{2} \\times 2 = 1 \\) bolt.\n3. Calculate the total amount of fiber needed: To find the total amount of fiber needed for the robe, we add the amount of blue fiber and the amount of white fiber together. So, \\( 2 \\) (blue) + \\( 1 \\) (white) = \\( 3 \\) bolts.\n\nThe answer is 3."
+      },
+      {
+        "question": "Josh decides to try flipping a house.  He buys a house for $80,000 and then puts in $50,000 in repairs.  This increased the value of the house by 150%.  How much profit did he make?",
+        "reference": 70000.0,
+        "answer": "To solve this problem, we need to follow these steps:\n\n1. Calculate the total cost Josh incurred.\n2. Determine the new value of the house after the repairs.\n3. Calculate the profit by subtracting the total cost from the new value of the house.\n\n**Step 1: Calculate the total cost Josh incurred.**\n\nJosh bought the house for $80,000 and spent $50,000 on repairs. Therefore, the total cost is:\n\\[ 80,000 + 50,000 = 130,000 \\]\n\n**Step 2: Determine the new value of the house after the repairs.**\n\nThe repairs increased the value of the house by 150%. This means the new value is the original value plus 150% of the original value. The original value of the house was $80,000. So, the increase in value is:\n\\[ 80,000 \\times 1.50 = 120,000 \\]\nAdding this increase to the original value gives the new value of the house:\n\\[ 80,000 + 120,000 = 200,000 \\]\n\n**Step 3: Calculate the profit.**\n\nThe profit is the new value of the house minus the total cost:\n\\[ 200,000 - 130,000 = 70,000 \\]\n\nTherefore, the profit Josh made is:\nThe answer is 70000."
+      }
+    ]
+  }
+}

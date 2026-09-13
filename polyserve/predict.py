@@ -71,6 +71,8 @@ GPU_SPECS: List[Tuple[str, float, float]] = [
     ("GTX 1080", 320.0, 8.9),
     ("GTX 1070", 256.0, 6.5),
     ("P100", 732.0, 19.0),
+    # After "RTX A4000": matching is by substring, first entry wins.
+    ("A40", 696.0, 149.7),
 ]
 
 
@@ -370,6 +372,19 @@ class Evaluation:
     spearman_tok_s: Optional[float]
     params: PerfParams
     prior_mape_tok_s: Optional[float] = None
+    keeps_prior: bool = False  # the defaults predicted better than the fit; they stay
+
+
+def choose(ev: Evaluation) -> Evaluation:
+    """Keep the defaults when they predict throughput better than the fit did out of sample.
+
+    Measured on an A40: vLLM's trials (3B and 7B, 4-bit, prefix-cached, prefill-bound) fitted to a
+    28.5% leave-one-out error against 22.8% for the untouched defaults. A worse fit is never applied.
+    """
+    if ev.mape_tok_s is not None and ev.prior_mape_tok_s is not None and ev.mape_tok_s > ev.prior_mape_tok_s:
+        ev.params = prior(ev.backend)
+        ev.keeps_prior = True
+    return ev
 
 
 def evaluate(obs: Sequence[Observation], dev: DeviceSpec, backend: str) -> Evaluation:
@@ -410,7 +425,7 @@ def fit_all(observations: Iterable[Observation], dev: DeviceSpec) -> Dict[str, E
     by: Dict[str, List[Observation]] = {}
     for o in observations:
         by.setdefault(o.backend, []).append(o)
-    return {b: evaluate(obs, dev, b) for b, obs in by.items()}
+    return {b: choose(evaluate(obs, dev, b)) for b, obs in by.items()}
 
 
 # --------------------------------------------------------------------------- convenience
@@ -460,7 +475,8 @@ def render_markdown(evals: Dict[str, Evaluation], dev: DeviceSpec) -> str:
 
     for b, e in sorted(evals.items()):
         p = e.params
-        lines.append(f"| {b} | {e.n} | {p.alpha:.2f} | {p.beta:.2f} | {p.overhead_s * 1000:.1f} ms | {f(e.mape_tok_s)}% | "
+        name = f"{b} (defaults kept)" if e.keeps_prior else b
+        lines.append(f"| {name} | {e.n} | {p.alpha:.2f} | {p.beta:.2f} | {p.overhead_s * 1000:.1f} ms | {f(e.mape_tok_s)}% | "
                      f"{f(e.prior_mape_tok_s)}% | {f(e.mape_ttft)}% | {f(e.spearman_tok_s, 2)} |")
     lines += ["", "LOO = leave-one-trial-out. Spearman ρ is rank agreement between predicted and measured tok/s "
               "across configs, which is what the search needs to prune safely.", ""]

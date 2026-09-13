@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from polyserve.backends.base import BaseBackend
+from polyserve.backends.vllm import AMPERE_FP8_KV
 from polyserve.bench.compare import results_path
 from polyserve.calibrate.objectives import Constraints, _e2e_latency, rank
 from polyserve.calibrate.workload import Workload
@@ -96,6 +97,11 @@ def strategy_variants(pick: Config, backend: BaseBackend, hw: HardwareDescriptor
     # KV cache: without quantization the pick's batch may not fit either.
     if pick.kv_dtype != "auto":
         out.append(fit_or_shrink("-kv", "kv", pick.model_copy(update={"kv_dtype": "auto"}), "an unquantized cache"))
+        if pick.backend == "vllm" and pick.kv_dtype == AMPERE_FP8_KV:
+            # On Ampere the fp8 cache also moves attention to FlashInfer; this separates the two effects.
+            flashinfer = pick.model_copy(update={"kv_dtype": "auto",
+                                                 "extra": {**pick.extra, "attention_backend": "FLASHINFER"}})
+            out.append(fit_or_shrink("-kv (FlashInfer kept)", "kv", flashinfer, "an unquantized cache"))
     else:
         for kd in backend.kv_dtypes(hw):
             out.append(variant(f"+kv:{kd}", "kv", pick.model_copy(update={"kv_dtype": kd})))
@@ -182,23 +188,32 @@ def _ref_cell(ref: Optional[Dict[str, object]], ours: float) -> str:
     return f"{tok:.0f} ({gain}){'' if ref.get('meets_slo') else ', missed SLO'}"
 
 
+def _gpu(d: Dict[str, object]) -> str:
+    """The card a results file was measured on, without the vendor prefix; "CPU" for a CPU-only run."""
+    return str(d.get("gpu") or ("CPU" if d.get("cpu") else "?")).replace("NVIDIA ", "")
+
+
 def compare_table(paths: Sequence[Path]) -> str:
     """PolyServe's pick against stock vLLM at bf16 and fp8, one row per (model, workload) results file."""
-    lines = ["| model | workload | PolyServe pick | tok/s | TTFT p50 | stock vLLM bf16 (gain) | stock vLLM fp8 (gain) "
-             "| stock llama.cpp (gain) |",
-             "|---|---|---|---|---|---|---|---|"]
+    lines = ["| GPU | model | workload | PolyServe pick | tok/s | TTFT p50 | stock vLLM bf16 (gain) "
+             "| stock vLLM fp8 (gain) | stock llama.cpp (gain) |",
+             "|---|---|---|---|---|---|---|---|---|"]
     notes: List[str] = []
     for p in sorted(paths):
         d = json.loads(Path(p).read_text(encoding="utf-8"))
+        if "rows" not in d:  # a calibration profile or other JSON kept next to the results
+            continue
         rows = {r["label"]: r for r in d.get("rows", [])}
         ps = rows.get("polyserve")
         model = str(d.get("model_id", "?")).split("/")[-1]
+        run = Path(p).parent  # a rerun kept in a folder inside a results folder (results-real/v3) is labelled
+        workload = f"{d.get('workload')}" + (f" ({run.name})" if run.parent.name.startswith("results") else "")
         if ps is None or not ps.get("ok"):
-            lines.append(f"| {model} | {d.get('workload')} | failed | | | | | |")
+            lines.append(f"| {_gpu(d)} | {model} | {workload} | failed | | | | | |")
             continue
         ours = float(ps["scored_tok_s"] or 0.0)
         llama = rows.get("llamacpp-cuda-default") or rows.get("llamacpp-cpu-default")
-        lines.append(f"| {model} | {d.get('workload')} | `{ps['config_key']}` | {ours:.0f} | "
+        lines.append(f"| {_gpu(d)} | {model} | {workload} | `{ps['config_key']}` | {ours:.0f} | "
                      f"{_ms(ps.get('scored_ttft_ms'))} | {_ref_cell(rows.get('vllm-default'), ours)} | "
                      f"{_ref_cell(rows.get('vllm-fp8-default'), ours)} | {_ref_cell(llama, ours)} |")
         notes += [f"{model} / {d.get('workload')}: {n}" for n in d.get("notes", [])
@@ -211,7 +226,10 @@ def ablation_report(paths: Sequence[Path]) -> str:
     out: List[str] = []
     for p in sorted(paths):
         d = json.loads(Path(p).read_text(encoding="utf-8"))
-        out += [f"**{str(d.get('model_id', '?')).split('/')[-1]} / {d.get('workload')}**", "", markdown(d["rows"]), ""]
+        folder = Path(p).parent  # a side check kept inside an ablation folder (ablation-real/flashinfer)
+        where = ", ".join([_gpu(d)] + ([folder.name] if folder.parent.name.startswith("ablation") else []))
+        out += [f"**{str(d.get('model_id', '?')).split('/')[-1]} / {d.get('workload')}** ({where})", "",
+                markdown(d["rows"]), ""]
         sweep = d.get("spec_sweep")
         if sweep:
             off = sweep["off"]["levels"]
@@ -252,6 +270,39 @@ def gguf_quality_table(path: Path, reference: str = "q8_0") -> str:
     lines = ["| GGUF | perplexity | vs Q8_0 |", "|---|---|---|"]
     for q, v in ppl.items():
         lines.append(f"| {q.upper()} | {v:.3f} | {'' if not ref or q == reference else f'{(v / ref - 1) * 100:+.1f}%'} |")
+    return "\n".join(lines)
+
+
+def mcnemar_p(lost: int, gained: int) -> float:
+    """Two-sided exact McNemar test: how lopsided the split is among problems only one side got right."""
+    n = lost + gained
+    if n == 0:
+        return 1.0
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(min(lost, gained) + 1)) / 2 ** n)
+
+
+def task_quality_table(paths: Sequence[Path]) -> str:
+    """Task accuracy per weight precision (benchmarks/task_quality.py output), paired against the first."""
+    lines = ["| model | weights | accuracy | 95% CI | vs reference | lost / gained | p (McNemar) |",
+             "|---|---|---|---|---|---|---|"]
+    for p in sorted(paths):
+        d = json.loads(Path(p).read_text(encoding="utf-8"))
+        model = str(d.get("model", "?")).split("/")[-1]
+        acc = d.get("accuracy", {})
+        for q, r in acc.items():
+            if "error" in r:
+                lines.append(f"| {model} | {q} | failed | | | | {str(r['error']).splitlines()[0][:60]} |")
+                continue
+            lo, hi = r["ci95"]
+            row = f"| {model} | {q} | {r['accuracy']:.1%} | {lo:.1%}–{hi:.1%} |"
+            ref_key = next((k for k in r if k.startswith("vs_")), None)
+            if ref_key is None:
+                lines.append(row + " reference | | |")
+                continue
+            ref, vs = ref_key[3:], r[ref_key]
+            p_value = mcnemar_p(vs["lost"], vs["gained"])
+            lines.append(row + f" {(r['accuracy'] - acc[ref]['accuracy']) * 100:+.1f} pts vs {ref} | "
+                         f"{vs['lost']} / {vs['gained']} | {'<0.001' if p_value < 0.001 else f'{p_value:.3f}'} |")
     return "\n".join(lines)
 
 

@@ -22,6 +22,13 @@ app = typer.Typer(help="PolyServe: hardware-adaptive LLM serving. One command, o
                   no_args_is_help=True, add_completion=False)
 console = Console()
 err = Console(stderr=True)
+if sys.platform == "win32":
+    # Legacy Windows consoles are cp1252: print what they cannot encode (α, →) as '?' rather than crash.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:
+            pass
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -191,12 +198,13 @@ def _quant_list(value: str) -> str:
     return value
 
 
-def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str):
+def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on"):
     from polyserve.pipeline import SearchOptions
 
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
         kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
+        combine=combine == "on",
     )
 
 
@@ -213,6 +221,10 @@ PREFIX_OPT = typer.Option("on", "--prefix-cache", callback=_on_off,
 LAYOUT_OPT = typer.Option("single", "--layout", callback=_layout,
                           help="Multi-GPU layout: single (default), replicas (one engine per GPU behind a load "
                                "balancer), tp (tensor parallel), auto (measure both, keep the better)")
+COMBINE_OPT = typer.Option("on", "--combine", callback=_on_off,
+                           help="After tuning one setting at a time, measure the leader with each adopted "
+                                "change undone, then combinations of the settings that came close on their "
+                                "own (up to 8 extra trials in all)")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 
 
@@ -337,6 +349,7 @@ def bench(
     speculative: str = SPEC_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
+    combine: str = COMBINE_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from polyserve import cache as profile_cache
@@ -350,7 +363,7 @@ def bench(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    opts = _opts(quant, kv_quant, speculative, prefix_cache)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
@@ -391,6 +404,7 @@ def recalibrate(
     speculative: str = SPEC_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
+    combine: str = COMBINE_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from polyserve.pipeline import resolve_profile
@@ -400,7 +414,7 @@ def recalibrate(
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine), layout=layout)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
 
@@ -425,6 +439,7 @@ def compare(
     speculative: str = SPEC_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
+    combine: str = COMBINE_OPT,
 ) -> None:
     """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from polyserve.bench import compare as _compare, to_markdown
@@ -439,11 +454,11 @@ def compare(
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine), layout=layout)
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
-                               quants=_opts(quant, kv_quant, speculative, prefix_cache).quants)
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -531,21 +546,28 @@ def fit(
     from polyserve import predict as P
     from polyserve.hardware import hardware_hash, probe as _probe
 
-    hw = _probe()
-    hh = hardware_hash(hw)
-    dev = P.device_spec(hw)
-    obs = []
+    if apply and all_machines:
+        err.print("[red]--apply needs this machine's profiles only; drop --all[/]")
+        raise typer.Exit(2)
+    hh = hardware_hash(_probe())
+    # One fit per machine, against the GPU its trials ran on: a roofline fitted to another card's
+    # bandwidth and compute says nothing about either card.
+    groups: dict = {}
     for _, p in profile_cache.list_profiles():
-        if all_machines or p.hardware_hash == hh:
-            obs += P.observations_from_profile(p)
-    evals = P.fit_all(obs, dev)
-    console.print(P.render_markdown(evals, dev))
-    if apply:
-        if all_machines:
-            err.print("[red]--apply needs this machine's profiles only; drop --all[/]")
-            raise typer.Exit(2)
-        path = P.save_params(hh, {b: e.params for b, e in evals.items()})
-        console.print(f"[green]wrote {path}[/]; calibration on hardware {hh} now prunes with these parameters")
+        if (all_machines or p.hardware_hash == hh) and p.hardware is not None:
+            groups.setdefault(p.hardware_hash, (p.hardware, []))[1].extend(P.observations_from_profile(p))
+    if not groups:
+        console.print(f"no calibration profiles for hardware {hh} under {profile_cache.profiles_dir()}")
+        return
+    for machine, (machine_hw, obs) in sorted(groups.items()):
+        dev = P.device_spec(machine_hw)
+        evals = P.fit_all(obs, dev)
+        if len(groups) > 1:
+            console.print(f"[bold]hardware {machine}[/]")
+        console.print(P.render_markdown(evals, dev))
+        if apply and machine == hh:
+            path = P.save_params(hh, {b: e.params for b, e in evals.items() if not e.keeps_prior})
+            console.print(f"[green]wrote {path}[/]; calibration on hardware {hh} now prunes with these parameters")
 
 
 @app.command("memory-report")
@@ -623,6 +645,7 @@ def serve(
     speculative: str = SPEC_OPT,
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
+    combine: str = COMBINE_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -638,7 +661,7 @@ def serve(
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine), layout=layout)
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")

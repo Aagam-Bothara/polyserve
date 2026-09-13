@@ -9,6 +9,7 @@
 3c. kv                - quantized KV caches, including the batch step a smaller cache admits.
 3d. prefix            - prefix-cache settings, when the workload's prompts share a prefix.
 3e. spec              - speculative decoding (n-gram lookup, a small draft model).
+3f. combine           - combinations of the changes from 3b-3e that were promising on their own.
 4. power (optional)   - on the leading config, sweep GPU power caps and/or locked SM clocks
                         through NVML without relaunching, and keep the setting that saves energy.
 
@@ -18,16 +19,17 @@ The winner is the objective's constrained argmax over *every* successful trial, 
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from polyserve.backends.base import BaseBackend, free_port
 from polyserve.calibrate.measure import run_trial
-from polyserve.calibrate.objectives import Constraints, pick
+from polyserve.calibrate.objectives import Constraints, pick, rank
 from polyserve.calibrate.workload import Workload
 from polyserve.memlog import device_used_mb, merge, parse_log
 from polyserve.memory import estimate as memory_estimate
@@ -48,6 +50,12 @@ ProgressFn = Callable[[str, Config, Optional[TrialResult]], None]
 
 class TrialRunner(Protocol):
     def run(self, cfg: Config, stage: str) -> TrialResult: ...
+
+
+def mentions_oom(log: str) -> bool:
+    """Whether an engine log shows a CUDA out-of-memory failure."""
+    text = log.lower()
+    return "out of memory" in text or "outofmemoryerror" in text
 
 
 class SubprocessTrialRunner:
@@ -124,11 +132,14 @@ class SubprocessTrialRunner:
         try:
             proc = backend.launch(cfg, model, port, log_path=log_path)
             if not proc.wait_ready(timeout=self.startup_timeout):
-                tail = proc.tail_log(20)
-                observation.measured = parse_log(cfg.backend, proc.tail_log(400))
+                tail, log = proc.tail_log(20), proc.tail_log(400)
+                observation.measured = parse_log(cfg.backend, log)
+                # vLLM prints its engine's out-of-memory error well above the 20-line tail: say so in
+                # the error, so the memory report counts it as the planner failure it is.
+                oom = "out of memory at start-up; " if mentions_oom(log) else ""
                 return TrialResult(
                     config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
-                    error=f"failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
+                    error=f"{oom}failed to start (rc={proc.returncode()})\n{tail}", memory=observation,
                 )
             perr = self._apply_power(cfg)
             if perr:
@@ -267,12 +278,26 @@ class StagedSearch:
     models: Dict[str, PreparedModel] = field(default_factory=dict)
     workload: Optional[Workload] = None
     prune_below: float = 0.4  # skip a quant whose predicted best tok/s < this fraction of the best predicted
+    # Skip a backend's remaining quants once its best measured tok/s is below this fraction of the
+    # leader's (throughput and balanced objectives). On an A40 with ShareGPT prompts llama.cpp reached
+    # 470 tok/s against vLLM's 1677 and its other three GGUF quants still took 25 minutes to lose.
+    drop_backend_below: float = 0.5
     # Stage 4: power settings to try on the leading config (the default setting first). Empty = off.
     power_points: List[PowerSetting] = field(default_factory=list)
     # Stage 3b: configs differing from the leader only in the prefill knob. None = stage off.
     prefill_variants: Optional[Callable[[Config], List[Config]]] = None
     # Stages 3c-3e: (name, variants of the current leader), run in order after the prefill stage.
     variant_stages: List[Tuple[str, Callable[[Config], List[Config]]]] = field(default_factory=list)
+    # Stage 3f: combinations. Stages 3b-3e change one dimension at a time, which misses strategies that
+    # only pay together: on an A40, llama.cpp's --kv-unified tied the leader before speculation joined
+    # it, and the pair, never tried, measured 12.7% better. Every change that came within combine_band
+    # of the leader it was measured against is a candidate; combinations of two or more (one value per
+    # dimension) are measured, best estimated first, up to max_combinations.
+    combine: bool = True
+    combine_band: float = 0.05
+    max_combinations: int = 8
+    feasible_fn: Optional[Callable[[Config], bool]] = None  # rejects combinations that cannot run
+    _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
@@ -321,6 +346,25 @@ class StagedSearch:
 
     # ---- stages
 
+    def _losing_backends(self, results: Sequence[TrialResult], already: Dict[str, str]) -> Dict[str, str]:
+        """Backends whose best measured tok/s so far is under drop_backend_below of another backend's best."""
+        if self.objective not in ("throughput", "balanced") or not self.drop_backend_below:
+            return {}
+        best: Dict[str, float] = {}
+        for r in results:
+            if r.ok and r.metrics.tok_s:
+                best[r.config.backend] = max(best.get(r.config.backend, 0.0), r.metrics.tok_s)
+        out: Dict[str, str] = {}
+        for backend, tok in best.items():
+            rivals = {b: t for b, t in best.items() if b != backend}
+            if backend in already or not rivals:
+                continue
+            leader, lead_tok = max(rivals.items(), key=lambda kv: kv[1])
+            if tok < self.drop_backend_below * lead_tok:
+                out[backend] = (f"{backend} reached {tok:.0f} tok/s, under {self.drop_backend_below:.0%} of "
+                                f"{leader}'s {lead_tok:.0f}")
+        return out
+
     def stage_quant(self, feasible: Sequence[Config]) -> List[Tuple[str, str]]:
         groups: Dict[Tuple[str, str], List[Config]] = {}
         for c in feasible:
@@ -341,7 +385,11 @@ class StagedSearch:
                     )
                     groups.pop(key, None)
         stage_results: Dict[Tuple[str, str], TrialResult] = {}
+        dropped: Dict[str, str] = {}  # backend -> why its remaining quants were skipped
         for key, group in groups.items():
+            if key[0] in dropped:
+                self.notes.append(f"skipped {key[0]}/{key[1]}: {dropped[key[0]]}")
+                continue
             candidates = _baseline_candidates(group)[: self.max_memory_trials_per_quant]
             if not candidates:
                 logger.warning("no baseline config for %s; skipping", key)
@@ -352,11 +400,14 @@ class StagedSearch:
                 stage_results[key] = res
                 if res.launched:
                     break
+            dropped.update(self._losing_backends(list(stage_results.values()), dropped))
         ok = [r for r in stage_results.values() if r.ok]
         from polyserve.calibrate.objectives import rank
 
         ranked = rank(ok, self.objective, self.constraints)
-        kept = [(r.result.config.backend, r.result.config.quant) for r in ranked[: self.top_quants]]
+        # A dropped backend does not go on to the later stages either: its batch sweep would lose the same way.
+        kept = [(r.result.config.backend, r.result.config.quant) for r in ranked
+                if r.result.config.backend not in dropped][: self.top_quants]
         logger.info("stage 1 kept: %s", kept)
         return kept
 
@@ -425,6 +476,103 @@ class StagedSearch:
             return
         for v in variants:
             self._run(v, "prefill")
+            self._variant_log.append(("prefill", base, v))
+
+    # Config fields a single-dimension stage may change (plus `extra`, compared key by key).
+    _DELTA_FIELDS = ("batch", "n_batch", "prefill_budget", "kv_dtype", "prefix_cache", "spec_decode")
+
+    @classmethod
+    def _delta(cls, ref: Config, var: Config) -> Dict[str, Any]:
+        """What a variant changed relative to the leader it was measured against."""
+        d: Dict[str, Any] = {f: getattr(var, f) for f in cls._DELTA_FIELDS if getattr(var, f) != getattr(ref, f)}
+        extra = {k: v for k, v in var.extra.items() if ref.extra.get(k) != v}
+        if extra:
+            d["extra"] = extra
+        return d
+
+    @staticmethod
+    def _apply(cfg: Config, delta: Dict[str, Any]) -> Config:
+        update = {k: v for k, v in delta.items() if k != "extra"}
+        if "extra" in delta:
+            update["extra"] = {**cfg.extra, **delta["extra"]}
+        return cfg.model_copy(update=update)
+
+    def _relative_gain(self, ref_cfg: Config, var_cfg: Config) -> Optional[float]:
+        """How much better a variant scored than its leader under the objective (0.05 = 5% better).
+        None when either trial failed or the variant breaks the objective's constraints."""
+        ref, var = self._done.get(ref_cfg.key()), self._done.get(var_cfg.key())
+        if ref is None or var is None or not ref.ok or not var.ok:
+            return None
+        scored = {r.result.config.key(): r for r in rank([ref, var], self.objective, self.constraints)}
+        a, b = scored.get(ref_cfg.key()), scored.get(var_cfg.key())
+        if a is None or b is None or not b.feasible:
+            return None
+        return (a.score - b.score) / abs(a.score) if a.score else 0.0
+
+    def _leader_without_each(self, base: Config) -> List[Config]:
+        """The leader with each change the variant stages adopted undone, one at a time.
+
+        A change adopted early can hurt one adopted later, and only removing it shows that. The
+        batch goes back together with the KV cache type too, since the KV stage raises the batch
+        when a smaller cache makes room."""
+        leader, _ = pick(self.results, self.objective, self.constraints)
+        if leader is None:
+            return []
+        lead = leader.config
+        changed = self._delta(base, lead)
+        out: List[Config] = [lead.model_copy(update={f: getattr(base, f)}) for f in changed if f != "extra"]
+        for k in changed.get("extra", {}):
+            extra = {kk: vv for kk, vv in lead.extra.items() if kk != k}
+            if k in base.extra:
+                extra[k] = base.extra[k]
+            out.append(lead.model_copy(update={"extra": extra}))
+        if "kv_dtype" in changed and "batch" in changed:
+            out.append(lead.model_copy(update={"kv_dtype": base.kv_dtype, "batch": base.batch}))
+        return out
+
+    def stage_combinations(self, base: Config) -> None:
+        """Stage 3f: measure combinations of the changes that were promising on their own.
+
+        Candidates are changes that came within combine_band of the leader they were measured
+        against, or beat it; each dimension keeps its best two. A combination takes at most one value
+        per dimension, is applied to `base` (the leader before stages 3b-3e), and is estimated by
+        adding its members' gains. Single changes count too: one measured on a later leader may do
+        better without an earlier change. On an A40 (`extract`) the fp8 cache won alone, the draft
+        model then won on top of it at 610 tok/s, and the draft model without the fp8 cache measured
+        728. Summed gains rank that last (the pair sums higher), so the leader with each adopted
+        change undone goes first, then the rest by estimate, up to max_combinations new and feasible
+        trials in all; the objective and its tie-break then decide as for any trial.
+        """
+        first = [c for c in self._leader_without_each(base)
+                 if c.key() not in self._done and (self.feasible_fn is None or self.feasible_fn(c))]
+        options: Dict[str, List[Tuple[float, Dict[str, Any]]]] = {}
+        for dim, ref_cfg, var_cfg in self._variant_log:
+            gain, delta = self._relative_gain(ref_cfg, var_cfg), self._delta(ref_cfg, var_cfg)
+            if gain is None or gain < -self.combine_band or not delta:
+                continue
+            kept = options.setdefault(dim, [])
+            if all(d != delta for _, d in kept):
+                kept.append((gain, delta))
+        choices = [[(0.0, None)] + sorted(kept, key=lambda x: -x[0])[:2] for kept in options.values() if kept]
+        candidates: List[Tuple[float, Config]] = []
+        for combo in (itertools.product(*choices) if choices else ()):
+            members = [(g, d) for g, d in combo if d is not None]
+            if not members:
+                continue
+            cfg = base
+            for _, d in members:
+                cfg = self._apply(cfg, d)
+            if cfg.key() in self._done or (self.feasible_fn is not None and not self.feasible_fn(cfg)):
+                continue
+            candidates.append((sum(g for g, _ in members), cfg))
+        candidates.sort(key=lambda x: -x[0])
+        tried: set = set()
+        for cfg in first + [c for _, c in candidates]:
+            if len(tried) >= self.max_combinations:
+                break
+            if cfg.key() not in tried:
+                tried.add(cfg.key())
+                self._run(cfg, "combine")
 
     def stage_variants(self, name: str, fn: Callable[[Config], List[Config]]) -> None:
         """Measure the current leader's variants along one dimension; the objective keeps the best."""
@@ -438,6 +586,7 @@ class StagedSearch:
             return
         for v in variants:
             self._run(v, name)
+            self._variant_log.append((name, leader.config, v))
 
     def stage_power(self, base: Config) -> None:
         """Measure the leading config under each power setting and let the objective choose."""
@@ -488,12 +637,14 @@ class StagedSearch:
             ]
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
-        if self.prefill_variants is not None:
-            leader, _ = pick(self.results, self.objective, self.constraints)
-            if leader is not None:
-                self.stage_prefill(leader.config)
+        leader, _ = pick(self.results, self.objective, self.constraints)
+        base = leader.config if leader is not None else None
+        if self.prefill_variants is not None and base is not None:
+            self.stage_prefill(base)
         for name, fn in self.variant_stages:
             self.stage_variants(name, fn)
+        if self.combine and base is not None:
+            self.stage_combinations(base)
         if self.power_points:
             leader, _ = pick(self.results, self.objective, self.constraints)
             if leader is not None:

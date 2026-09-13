@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from polyserve.gguf import list_hub_models
 from polyserve.models import ModelSpec
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ def find_int4_repos(
         ranked: Dict[str, Tuple[int, int, str]] = {}
         for query in (f"{name}-{method}", f"{name} {method}"):
             try:
-                for m in api.list_models(search=query, sort="downloads", direction=-1, limit=limit):
+                for m in list_hub_models(api, query, limit):
                     rid = m.id
                     low = rid.lower()
                     # Same model, this method, and not a GGUF re-upload.

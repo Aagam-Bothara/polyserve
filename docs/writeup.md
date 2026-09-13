@@ -52,7 +52,7 @@ A full grid would be 144 launches × ~30 s (engine startup dominates, not the 10
 
 The final choice is the objective's constrained argmax over **every** successful trial from all three stages, not only stage 3, so a stage-1 baseline that happens to be best is not lost. Trials are keyed by config and never repeated. A trial that fails to launch (OOM, unsupported flag) is recorded in the table with its log tail; it is data, not an exception.
 
-Later stages vary the leader along one dimension at a time: the prefill budget, the KV-cache type, prefix-cache flags (on workloads whose prompts share a prefix), speculative decoding, and optionally power. The README's Search options section lists them.
+Later stages vary the leader along one dimension at a time: the prefill budget, the KV-cache type, prefix-cache flags (on workloads whose prompts share a prefix), speculative decoding, and optionally power. The README's Search options section lists them. Changing one dimension at a time misses strategies that only pay together, and keeps changes that get in a later one's way, so a final stage first measures the leader with each adopted change undone, then takes every change that came within 5% of the leader it was measured against, forms the combinations (one value per dimension, applied to the leader before the variant stages), estimates each by adding its members' gains, and measures the best, eight trials in all. The undo step came from an ablation: on `extract` on an A40 the search adopted the fp8 KV cache (+19% on its own) and then a draft model on top of it, but the draft model without the fp8 cache ran 19% faster than that pick, and summed gains ranked that configuration below every pair. With the undo step, a rerun found it on its second undo trial (726 tok/s against 604 for the adopted pair) and served it at 731 tok/s, 66.5% ahead of stock vLLM.
 
 Each trial is measured at concurrency 1, 4 and 8, and the objective scores it at whichever level best satisfies the constraint. For `balanced` that is the highest-throughput level whose TTFT is still under the ceiling, so the winner is a (config, load) pair the server can actually be run at, not a throughput number achieved with a TTFT the constraint forbids. Scores within 2% are treated as ties. A tie goes first to the configuration that switches on fewer optional strategies (a strategy is adopted only when it measurably wins), then to the larger context window, then the larger batch, then the lower energy: a 1% tok/s edge is measurement noise, a doubled context is a capability.
 
@@ -123,7 +123,9 @@ matters: pruning is safe when the ranking is right even if the magnitudes are of
 The search uses it conservatively. With fitted parameters, stage 1 skips a (backend, quant) group
 whose predicted best is below 40% of the best predicted group, and stage 3 tries batch settings in
 predicted order so an interrupted calibration already holds the likely winner. With priors only,
-nothing is pruned; every prediction carries a fitted/prior flag. The queueing term is what made
+nothing is pruned; every prediction carries a fitted/prior flag. Measurements prune as well: once a
+backend's best measured quant is below half of another backend's best, its remaining quants are
+skipped. On ShareGPT prompts on an A40 that saved three llama.cpp trials of several minutes each. The queueing term is what made
 the llama.cpp result on the RTX 3090 explicable before it was measured: with 8 clients on 4 slots
 the median request waits a full wave, which is the 952 ms TTFT the trial recorded, and 8 slots
 remove the wait.

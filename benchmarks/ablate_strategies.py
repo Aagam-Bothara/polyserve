@@ -68,6 +68,9 @@ def main() -> int:
     ap.add_argument("--baselines", action="store_true", help="also measure stock vLLM at bf16 and fp8")
     ap.add_argument("--spec-sweep", type=int, nargs="*", default=None, metavar="C",
                     help="concurrency levels for a speculative-decoding on/off sweep")
+    ap.add_argument("--only", action="append", default=None, metavar="LABEL",
+                    help="measure only this variant (plus the pick, for a back-to-back reference); repeat for "
+                         "more, and write labels that start with '-' as --only=-kv")
     args = ap.parse_args()
 
     hw = probe()
@@ -103,6 +106,8 @@ def main() -> int:
                              Config(backend="vllm", quant="fp8", ctx=ctx, batch=256, gpu_memory_utilization=0.90))]
         todo.append(Variant("polyserve", "pick", pick))
         todo += strategy_variants(pick, backend, hw, model, wl)
+        if args.only is not None:
+            todo = [v for v in todo if v.label == "polyserve" or v.label in args.only]
 
         rows: List[Dict[str, object]] = []
         for v in todo:
