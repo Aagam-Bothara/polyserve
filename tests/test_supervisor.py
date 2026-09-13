@@ -66,20 +66,24 @@ def test_process_reports_startup_failure(tmp_path):
 
 
 def test_supervisor_restarts_after_crash(tmp_path):
-    # Crash once, then stay up, so "restarted and recovered" is observable rather than a race
-    # against a server that keeps dying.
-    be = FakeBackend(["--die-after", "1.0", "--die-once", str(tmp_path / "died")])
+    # The test crashes the server itself (GET /crash) instead of using a timer: a 1 s die timer raced
+    # wait_ready's 1 s poll, and on Linux the server was often dead before the first health check.
+    be = FakeBackend(["--crashable"])
     sup = Supervisor(be, _cfg(), None, log_path=tmp_path / "s.log", startup_timeout=15, health_interval=0.3,
                      max_restarts=2)
     sup.start()
     try:
         first_pid = sup.process.pid
         assert sup.healthy()
+        try:
+            httpx.get(sup.base_url + "/crash", timeout=5)
+        except httpx.HTTPError:
+            pass  # the server exits mid-request
         deadline = time.time() + 20
         while time.time() < deadline and sup.restarts == 0:
             time.sleep(0.2)
         assert sup.restarts >= 1
-        # After the one crash the restarted process stays up, so recovery is deterministic.
+        # Nothing crashes the restarted process, so recovery is deterministic.
         deadline = time.time() + 15
         while time.time() < deadline and not sup.healthy():
             time.sleep(0.1)

@@ -37,7 +37,9 @@ nvml = ["nvidia-ml-py>=12.535.133"]
 # NOTE: the name "llmtrace" on PyPI is an unrelated observability package. This extra points at
 # the tracer PolyServe actually uses; install it from git so pip can never resolve a stranger's code.
 llmtrace = ["llmtrace @ git+https://github.com/Aagam-Bothara/llmtrace.git"]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff>=0.1"]
+# ruff is pinned: its default rules change between releases (0.16 added pyupgrade), so an unpinned
+# linter passed locally and failed in CI on the same code.
+dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff==0.15.0"]
 
 [project.scripts]
 polyserve = "polyserve.cli:app"
@@ -54,3 +56,6 @@ asyncio_mode = "auto"
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]  # explicit, so the rule set does not move with ruff's defaults

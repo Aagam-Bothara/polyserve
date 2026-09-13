@@ -14,11 +14,16 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+CRASHABLE = False  # --crashable: GET /crash exits abruptly, so a test decides when the crash happens
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):  # silence
         pass
 
     def do_GET(self):
+        if self.path == "/crash" and CRASHABLE:
+            os._exit(9)
         if self.path == "/health":
             body = b'{"status":"ok"}'
         elif self.path == "/v1/models":
@@ -63,7 +68,10 @@ def main() -> None:
     ap.add_argument("--die-after", type=float, default=0.0, help="exit abruptly after N seconds")
     ap.add_argument("--die-once", default="", help="marker path; die only on the first start, then stay up")
     ap.add_argument("--fail", action="store_true", help="exit 3 immediately")
+    ap.add_argument("--crashable", action="store_true", help="GET /crash exits abruptly")
     args = ap.parse_args()
+    global CRASHABLE
+    CRASHABLE = args.crashable
     if args.fail:
         print("fake backend: refusing to start", flush=True)
         sys.exit(3)
