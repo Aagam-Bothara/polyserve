@@ -303,6 +303,11 @@ class StagedSearch:
     combine_band: float = 0.05
     max_combinations: int = 8
     feasible_fn: Optional[Callable[[Config], bool]] = None  # rejects combinations that cannot run
+    # Stages 3b-3f run for the leading engine and for every other engine within this fraction of it
+    # after the batch stage (0 = the leader only). Tuning only the leader can eliminate the eventual
+    # winner: on Dolly-15k prompts on an A40, SGLang led the first trial, fell behind once vLLM got
+    # the fp8 cache and a draft model, and was never tried with either.
+    contender_band: float = 0.10
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -580,7 +585,7 @@ class StagedSearch:
         A change adopted early can hurt one adopted later, and only removing it shows that. The
         batch goes back together with the KV cache type too, since the KV stage raises the batch
         when a smaller cache makes room."""
-        leader, _ = pick(self.results, self.objective, self.constraints)
+        leader = self._leader(base.backend)
         if leader is None:
             return []
         lead = leader.config
@@ -612,6 +617,8 @@ class StagedSearch:
                  if c.key() not in self._done and (self.feasible_fn is None or self.feasible_fn(c))]
         options: Dict[str, List[Tuple[float, Dict[str, Any]]]] = {}
         for dim, ref_cfg, var_cfg in self._variant_log:
+            if ref_cfg.backend != base.backend:  # another engine's changes do not carry over
+                continue
             gain, delta = self._relative_gain(ref_cfg, var_cfg), self._delta(ref_cfg, var_cfg)
             if gain is None or gain < -self.combine_band or not delta:
                 continue
@@ -639,9 +646,45 @@ class StagedSearch:
                 tried.add(cfg.key())
                 self._run(cfg, "combine")
 
-    def stage_variants(self, name: str, fn: Callable[[Config], List[Config]]) -> None:
-        """Measure the current leader's variants along one dimension; the objective keeps the best."""
-        leader, _ = pick(self.results, self.objective, self.constraints)
+    def _leader(self, backend: Optional[str] = None) -> Optional[TrialResult]:
+        """The objective's current winner, overall or among one engine's trials."""
+        pool = self.results if backend is None else [r for r in self.results if r.config.backend == backend]
+        leader, _ = pick(pool, self.objective, self.constraints)
+        return leader
+
+    def _contenders(self, after: str = "the batch stage") -> List[Config]:
+        """The leader's config, then the best config of every other engine within contender_band of it."""
+        ranked = rank(self.results, self.objective, self.constraints)
+        if not ranked:
+            return []
+        lead = ranked[0]
+        out, seen = [lead.result.config], {lead.result.config.backend}
+        for x in ranked[1:]:
+            backend = x.result.config.backend
+            if backend in seen:
+                continue
+            seen.add(backend)
+            if (self.contender_band > 0 and lead.feasible and x.feasible
+                    and x.score - lead.score <= self.contender_band * abs(lead.score)):
+                out.append(x.result.config)
+                self.notes.append(f"{backend} came within {self.contender_band:.0%} of the leading "
+                                  f"{lead.result.config.backend} after {after}, so it was tuned as well")
+        return out
+
+    def _tune(self, base: Config) -> None:
+        """Stages 3b-3f for one engine: the prefill knob, the variant stages and the combinations, each on
+        that engine's own leader."""
+        if self.prefill_variants is not None:
+            self.stage_prefill(base)
+        for name, fn in self.variant_stages:
+            self.stage_variants(name, fn, backend=base.backend)
+        if self.combine:
+            self.stage_combinations(base)
+
+    def stage_variants(self, name: str, fn: Callable[[Config], List[Config]], backend: Optional[str] = None) -> None:
+        """Measure the leader's variants along one dimension (one engine's leader when `backend` is given);
+        the objective keeps the best."""
+        leader = self._leader(backend)
         if leader is None:
             return
         try:
@@ -700,16 +743,18 @@ class StagedSearch:
             return None, ["every stage-1 trial failed"] + [
                 f"{r.config.key()}: {r.error}" for r in self.results if r.error
             ]
+        if self.budget_s is not None:
+            # With a budget, try the variations before the memory and batch sweeps: on Dolly-15k prompts a
+            # 10-minute budget spent all its trials on those sweeps and served at stock speed, while the gain
+            # (vLLM's draft model and fp8 cache) sat in the variation stages. Every engine within the band
+            # gets them, since SGLang led that first stage.
+            for base in self._contenders("the precision stage"):
+                for name, fn in self.variant_stages:
+                    self.stage_variants(name, fn, backend=base.backend)
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
-        leader, _ = pick(self.results, self.objective, self.constraints)
-        base = leader.config if leader is not None else None
-        if self.prefill_variants is not None and base is not None:
-            self.stage_prefill(base)
-        for name, fn in self.variant_stages:
-            self.stage_variants(name, fn)
-        if self.combine and base is not None:
-            self.stage_combinations(base)
+        for base in self._contenders():
+            self._tune(base)
         if self.power_points:
             leader, _ = pick(self.results, self.objective, self.constraints)
             if leader is not None:

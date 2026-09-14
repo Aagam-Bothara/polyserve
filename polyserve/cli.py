@@ -126,12 +126,13 @@ def _workload(name: str, file: Optional[Path] = None):
 
 
 def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], workload=None,
-                 tpot_ceiling: Optional[float] = None):
+                 tpot_ceiling: Optional[float] = None, ttft_percentile: int = 95):
     from polyserve.calibrate.objectives import Constraints
 
     ceiling = ttft_ceiling if ttft_ceiling is not None else (workload.ttft_ceiling_ms if workload else 500.0)
     tpot = tpot_ceiling if tpot_ceiling is not None else (workload.tpot_ceiling_ms if workload else None)
-    return Constraints(ttft_ceiling_ms=ceiling, tok_s_floor_abs=tok_s_floor, tpot_ceiling_ms=tpot)
+    return Constraints(ttft_ceiling_ms=ceiling, tok_s_floor_abs=tok_s_floor, tpot_ceiling_ms=tpot,
+                       ttft_percentile=ttft_percentile)
 
 
 def _power_mode(value: str) -> str:
@@ -218,14 +219,20 @@ def _duration(value: Optional[str]) -> Optional[float]:
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
+def _percentile(value: int) -> int:
+    if value not in (50, 95):
+        raise typer.BadParameter("expected 95 (the default) or 50 (the median)")
+    return value
+
+
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
-          budget: Optional[float] = None):
+          budget: Optional[float] = None, ttft_percentile: int = 95):
     from polyserve.pipeline import SearchOptions
 
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
         kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
-        combine=combine == "on", budget_s=budget,
+        combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile,
     )
 
 
@@ -251,6 +258,9 @@ BUDGET_OPT = typer.Option(None, "--budget", callback=_duration,
                                "(precision, memory, batch, then variations and combinations); later trials are "
                                "skipped, the best so far wins, and the profile lists what was skipped.")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
+TTFT_PCT_OPT = typer.Option(95, "--ttft-percentile", callback=_percentile,
+                            help="balanced: which time to first token the ceiling applies to: 95 (default; at "
+                                 "most 1 request in 20 may be slower) or 50 (the median)")
 
 
 # --------------------------------------------------------------------------- commands
@@ -365,6 +375,7 @@ def bench(
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
+    ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None, help="latency/efficiency: absolute tok/s floor"),
     save: bool = typer.Option(False, "--save", help="Also write the winning profile to the cache"),
     power: str = POWER_OPT,
@@ -391,11 +402,11 @@ def bench(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=_progress,
                         power_mode=power, options=opts)
     if phases != "unified":
@@ -423,6 +434,7 @@ def recalibrate(
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
+    ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
     power: str = POWER_OPT,
     tpot_ceiling: Optional[float] = TPOT_OPT,
@@ -441,10 +453,10 @@ def recalibrate(
 
     wl = _workload(workload, workload_file)
     profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
-                              workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
+                              workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile), layout=layout)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
 
@@ -463,6 +475,7 @@ def compare(
                                 help="Measure every row this many times, interleaved, and report the median and "
                                      "the spread; rows whose runs overlap PolyServe's are flagged as within noise"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
+    ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
     power: str = POWER_OPT,
     tpot_ceiling: Optional[float] = TPOT_OPT,
@@ -483,17 +496,17 @@ def compare(
     from polyserve.pipeline import prepare_and_plan, resolve_profile, select
 
     wl = _workload(workload, workload_file)
-    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile), layout=layout)
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
-                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget).quants)
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -672,6 +685,7 @@ def serve(
     backend: Optional[str] = typer.Option(None, "--backend", help="Force a backend by name"),
     skip_calibration: bool = typer.Option(False, "--skip-calibration", help="Serve with backend defaults"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
+    ttft_percentile: int = TTFT_PCT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None, help="latency/efficiency: absolute tok/s floor"),
     power: str = POWER_OPT,
     tpot_ceiling: Optional[float] = TPOT_OPT,
@@ -696,10 +710,10 @@ def serve(
     wl = _workload(workload, workload_file)
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
-                              workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
+                              workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile), layout=layout)
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")

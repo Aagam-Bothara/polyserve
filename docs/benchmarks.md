@@ -38,7 +38,7 @@ One A40 (48 GB, Ampere, cc 8.6) on RunPod Secure Cloud, with vLLM 0.11.0 plus Fl
 - **The fp8 KV cache and vLLM's n-gram speculation** never beat noise on these synthetic prompts (on real text the fp8 cache did; see [Real text, and a card where memory is tight](#real-text-and-a-card-where-memory-is-tight)), and the tie-break (fewer strategies wins inside 2%) kept them out of every pick. On llama.cpp the result was different. Its `ngram-mod` speculation won on `chat-system` (time per token 16.3 → 6.8 ms), and `--kv-unified` measured 12.7% better still. The staged search never tried that combination, because it had tested prefix flags before speculation joined the leader. Tuning one dimension at a time has limits, and this is one of them; the `--combine` stage, added since, measures such pairs.
 - **Two GPUs** (`high-concurrency`, two PCIe A40s): two replicas gave 3216 tok/s against 1845 on one GPU (+74%). Tensor parallelism gave 1560, slower than one GPU. `--layout auto` picked replicas. Disaggregated prefill/decode on `rag` lost to one engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), and `--phases auto` kept one engine.
 - **Qwen2.5-7B `chat`**: the 4-bit pick reached 495 tok/s against 232 for stock vLLM, with time per token 11.9 ms against 31.3. The fp8 KV cache cost 1.5% and n-gram speculation 40%, and neither was picked.
-- **Run-to-run variation** was 1–3% for vLLM and up to 10% for llama.cpp. The same llama.cpp pick measured 508, 455 and 427 tok/s across calibration, comparison and ablation.
+- **Run-to-run variation** was 1–3% for vLLM on these synthetic prompts and up to 10% for llama.cpp. On real text, where answers stop when the model does, three interleaved runs spread by up to 5.6% (see [Your own prompts, SGLang, and a time budget](#your-own-prompts-sglang-and-a-time-budget)), so single-run gains of a few percent there are not conclusive. The same llama.cpp pick measured 508, 455 and 427 tok/s across calibration, comparison and ablation.
 
 **Quality**, from `benchmarks/quality_check.py`, perplexity on the same public-domain book at every precision:
 
@@ -121,12 +121,33 @@ One A40 on 13–14 September 2026: vLLM 0.29.0 and SGLang 0.5.19 (in its own env
 - SGLang led the first trial (490 against 471 tok/s for vLLM, with lower time to first token and 10% less energy per token). vLLM took the lead with the fp8 cache (521), then a 0.5B draft model (581). Undoing the batch step-up with the draft model on measured 603, the best trial of the search, and became the pick: the combination stage's undo step at work on a fresh workload. n-gram speculation collapsed to 141 tok/s, as on this card before.
 - The pick scored 603 tok/s in calibration and 547 in the comparison: choosing the best of many noisy trials flatters it, which is why the comparison re-measures with repeats.
 - The draft model roughly doubled time to first token (120 against 54 ms), inside the `chat` preset's 500 ms ceiling.
-- Later stages vary only the current leader, so SGLang was never measured with the fp8 cache or a draft model once vLLM led. Whether it would have won with them is unknown.
+- Later stages then varied only the current leader, so SGLang was never measured with the fp8 cache once vLLM led; whether it would have won with it is unknown. After the batch stage SGLang's best (490 tok/s) was 2% behind vLLM's (500), so the search now tunes it as well: every engine within 10% of the leader gets the later stages. SGLang's backend offers no speculative decoding, so a draft model was never an option for it.
 - Flipped one at a time (single runs, back to back): without the draft model 509 tok/s against the pick's 571, so the draft model is worth about 12%, nearly all of the gain over stock vLLM. Without the fp8 cache 565 (−1%, within noise once the draft model is on, though it was worth 4% before the draft model joined); with the unquantized cache but FlashInfer attention kept 541. With 4-bit weights, which `--quant auto` leaves out for quality, GPTQ reached 712 (+25%) and AWQ 625 (+9%).
 
 **SGLang alone on `sharegpt`** (`--backend sglang`, one run per row): PolyServe tuned SGLang to bf16 with the fp8_e5m2 KV cache at batch 64, 1952 tok/s against 1799 for stock SGLang (+8.5%, time to first token 364 against 318 ms). As on vLLM, the fp8 cache was the step that paid (1790 → 1948 tok/s in calibration); batch 16 left requests queueing (5.9 s to first token). SGLang's backend offers no speculative decoding yet, so none was tried. For scale only, since it came from another session: stock vLLM measured 1714 on the same workload and card.
 
 **The same with `--budget 10m`:** calibration stopped after 6 trials in 580 s (precision, memory and batch for each engine) and skipped 7, the stages where the full run found its gain. The pick was plain vLLM bf16 at batch 64: 504 tok/s (504 / 505 / 503) against stock vLLM's 506 (518 / 503 / 506), which the comparison flagged as within run-to-run noise, and 474 for stock SGLang.
+
+## Judged at the 95th percentile
+
+Every comparison above judged the `balanced` ceiling on the median time to first token, which lets half the requests run past it. PolyServe now judges it at the 95th percentile by default (`--ttft-percentile 50` restores the median). Every trial recorded both, so the same measurements can be re-scored without a GPU: `benchmarks/rescore_ttft.py` ranks each row under both rules, and its median columns reproduce the tables above. These numbers are **re-scored, not re-measured**, and PolyServe's pick is still the one the median chose; a calibration judged at p95 could choose differently, which only a new run can show.
+
+In 8 of 20 comparisons the load the median chose sent more than 1 request in 20 past the ceiling. Those rows, by the median → at p95:
+
+| machine, model, engine | workload | ceiling | PolyServe | vs stock bf16 | vs stock fp8 |
+|---|---|---|---|---|---|
+| A40, 3B, vLLM 0.11, 4-bit allowed | `high-concurrency` | 1000 ms | 1786 tok/s at 64 users → 1432 at 32 | +6% → +20% | +60% → +28% |
+| A40, 7B, vLLM 0.11, 4-bit allowed | `chat` | 500 ms | 495 at 8 → 315 at 4 | +113% → +148% | +144% → +423% |
+| A40, 3B, vLLM 0.11, `--phases auto` (served unified) | `rag` | 1500 ms | 106 at 8 → 46 at 1 | +1% → tie | +134% → +2% |
+| two A40s, 3B, vLLM 0.11, two replicas | `high-concurrency` | 1000 ms | 3152 at 128 → 3049 at 64 | +84% → +143% | +134% → +164% |
+| A40, 3B, llama.cpp only | `chat-system` | 500 ms | 455 at 4 → 368 at 1 | against stock llama.cpp: +190% → +135% | |
+| L4, 7B, vLLM 0.11 | `chat` | 500 ms | 195 at 8 → 107 at 4 | stock misses the TPOT ceiling | tie → tie |
+| L4, 7B, vLLM 0.11 | `sharegpt` | 1000 ms | 738 at 32 → 212 at 8 | +80% → +63% | +5% → tie |
+| CPU, 0.5B, llama.cpp | `default` | 500 ms | 92 at 1 → misses (518 ms at p95) | against stock llama.cpp: +37% → stock meets it and the pick does not | |
+
+The other 12 kept their load: every real-text pick on the A40 (`extract` three times, `sharegpt` on vLLM and on SGLang, `code-edit`), both Dolly runs, and `chat`, `chat-system`, `generation` and `rag-shared` on the A40 with vLLM 0.11. Some of their stock rows did not: stock fp8 on `chat` and `chat-system` fell back to fewer users, so PolyServe's lead over it grew from +36% to +125% and from +34% to +121%.
+
+What it shows: the median hid queueing. The picks that changed were the ones served at the highest load the median allowed, and judged by the tail they serve fewer users at once. Stock settings queue worse at the tail as often as not, so the lead over stock grew in some rows and shrank in others; where it was already small against the stronger stock row it stayed a tie or became one (`rag`, and the L4 on `chat` and `sharegpt`).
 
 ## Memory planner accuracy
 
@@ -169,3 +190,4 @@ These are gaps, not claims. In rough order of how much they would change the con
 6. **Disaggregated prefill and decode at a scale where it could pay.** On two PCIe-linked A40s with a 3B model it ran end to end but lost to one engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), and one of the two pairs tried failed a quarter of its requests with KV blocks the decode engine never pulled. Published gains come from larger models, NVLink or RDMA between the engines, and heavier prefill contention, none of which was available here.
 7. **Speculative decoding by load.** On real text on the A40 (vLLM 0.29, fp8 cache on FlashInfer) n-gram speculation made one user up to 80% faster and collapsed from four users up; on the L4 (vLLM 0.11, native fp8 cache) it neither helped nor collapsed on `sharegpt`. Which part of the A40 setup causes the collapse is unmeasured. A draft model paid on `extract`. A server that switches speculation on only at low load would get the single-user gain without the collapse; PolyServe picks one setting per workload. llama.cpp's `ngram-mod` has not been measured on real text.
 8. **Memory outside vLLM's reservation.** At batch 512 with the fp8 cache and 95% memory utilization, vLLM 0.11 ran out of memory at start-up twice; vLLM 0.29 started that shape every time it was tried. The planner does not model that memory, and the evidence gives no single size for it, so calibration now retries such a failure with 5 points less memory reserved (down to 0.85) instead. A planner term would need start-up logs from several engine versions.
+9. **A calibration judged at p95.** The [p95 numbers](#judged-at-the-95th-percentile) are re-scored from runs that picked by the median. The p95 rule, tuning every engine within 10% of the leader, and the budget's new order have run in tests only.

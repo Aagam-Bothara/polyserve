@@ -4,7 +4,7 @@
 |-------------|----------------------------------------|
 | throughput  | max tok/s                              |
 | latency     | min request latency (TTFT + TPOT x tokens) s.t. tok/s >= floor |
-| balanced    | max tok/s  s.t. TTFT   <= ceiling      |
+| balanced    | max tok/s  s.t. TTFT p95 <= ceiling    |
 | efficiency  | min J/tok  s.t. tok/s >= floor         |
 
 Floors default to a fraction of the best observed tok/s; the ceiling defaults to an absolute
@@ -32,6 +32,10 @@ from polyserve.models import OBJECTIVES, TrialMetrics, TrialResult
 @dataclass
 class Constraints:
     ttft_ceiling_ms: float = 500.0  # balanced
+    # Which time to first token the ceiling applies to: 95 = the 95th percentile (1 request in 20 is
+    # slower), 50 = the median. In 8 of 20 recorded comparisons (an A40, an L4, a CPU) the load a
+    # pick was served at by the median broke the ceiling at p95, so the tail is the default.
+    ttft_percentile: int = 95
     tok_s_floor_frac: float = 0.5  # latency / efficiency: floor = frac x best tok/s
     tok_s_floor_abs: Optional[float] = None  # overrides the fraction when set
     noise_tolerance: float = 0.02  # scores within 2% are ties -> prefer larger ctx, then batch
@@ -72,6 +76,13 @@ def _ttft(m: TrialMetrics) -> float:
     return t if (t is not None and math.isfinite(t)) else math.inf
 
 
+def _ttft_for(m: TrialMetrics, percentile: int) -> float:
+    """The time to first token a ceiling is judged on: the 95th percentile when asked for and recorded."""
+    if percentile >= 95 and m.ttft_p95_ms is not None and math.isfinite(m.ttft_p95_ms):
+        return m.ttft_p95_ms
+    return _ttft(m)
+
+
 def _levels(r: TrialResult) -> List[TrialMetrics]:
     levels = [m for m in r.metrics.by_concurrency.values() if m.ok]
     return levels or [r.metrics]
@@ -101,7 +112,7 @@ def _score_and_constraint(
         floor = cons.tok_s_floor(results)
         return _e2e_latency, (lambda m: max(0.0, floor - m.tok_s))
     if objective == "balanced":
-        return (lambda m: -m.tok_s), (lambda m: max(0.0, _ttft(m) - cons.ttft_ceiling_ms))
+        return (lambda m: -m.tok_s), (lambda m: max(0.0, _ttft_for(m, cons.ttft_percentile) - cons.ttft_ceiling_ms))
     if objective == "efficiency":
         floor = cons.tok_s_floor(results)
 
@@ -226,6 +237,7 @@ def pick(
     m = top.metrics
     notes.append(
         f"winner scored at concurrency {m.concurrency}: {m.tok_s:.1f} tok/s, "
-        f"TTFT {m.ttft_ms:.0f} ms" + (f", {m.joules_per_token:.3f} J/tok" if m.joules_per_token else "")
+        f"TTFT {m.ttft_ms:.0f} ms" + (f" (p95 {m.ttft_p95_ms:.0f})" if m.ttft_p95_ms is not None else "")
+        + (f", {m.joules_per_token:.3f} J/tok" if m.joules_per_token else "")
     )
     return top.result, notes

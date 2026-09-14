@@ -69,9 +69,13 @@ class SearchOptions:
     phase_tuning: bool = True  # the prefill-knob stage
     combine: bool = True  # combinations of the strategies that were promising on their own
     budget_s: Optional[float] = None  # --budget: seconds of calibration, after which later trials are skipped
+    ttft_percentile: int = 95  # --ttft-percentile: which time to first token the ceiling applies to
 
-    def key(self) -> Dict[str, str]:
-        """Non-default options, recorded in the profile and in its cache path."""
+    def key(self, objective: Optional[str] = None) -> Dict[str, str]:
+        """Options that change the pick, recorded in the profile and in its cache path: the non-default
+        ones, and for `balanced` (the objective with a TTFT ceiling) the percentile unless it is the
+        median. Balanced profiles from before the percentile existed were picked by the median and
+        carry no key for it, so they are served only where the median is asked for."""
         out: Dict[str, str] = {}
         if self.quants is not None:
             out["quant"] = "+".join(self.quants)
@@ -87,6 +91,8 @@ class SearchOptions:
             out["combine"] = "off"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
+        if objective == "balanced" and self.ttft_percentile != 50:
+            out["ttft"] = f"p{self.ttft_percentile}"
         return out
 
     def allows(self, quant: str) -> bool:
@@ -284,7 +290,8 @@ def calibrate(
     opts = options or SearchOptions()
     workload = workload or get_workload("default")
     constraints = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
-                                             tpot_ceiling_ms=workload.tpot_ceiling_ms)
+                                             tpot_ceiling_ms=workload.tpot_ceiling_ms,
+                                             ttft_percentile=opts.ttft_percentile)
     feasible = plan.all_feasible
     if not feasible:
         raise RuntimeError("memory planner left no feasible configuration; try a smaller model or quant")
@@ -339,7 +346,7 @@ def calibrate(
     profile.calibration_seconds = elapsed
     profile.calibration_trials = len(search.results)
     profile.power_mode = power_mode
-    profile.options = opts.key()
+    profile.options = opts.key(objective)
     return profile
 
 
@@ -404,7 +411,7 @@ def resolve_profile(
         return _resolve_layout(spec, objective, force_backend, recalibrate, workload, constraints, progress, hw,
                                on_stage, power_mode, opts, layout)
     if not recalibrate and not skip_calibration:
-        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=opts.key())
+        cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=opts.key(objective))
         if _usable(cached, opts, force_backend):
             say("cache hit")
             return cached
@@ -466,7 +473,7 @@ def _resolve_layout(spec: ModelSpec, objective: str, force_backend: Optional[str
     from polyserve.layout import calibrate_layout
 
     say = on_stage or (lambda s: None)
-    key = {**options.key(), "layout": layout}
+    key = {**options.key(objective), "layout": layout}
     if not recalibrate:
         cached = profile_cache.load(hw, spec, objective, workload.name, power_mode, options=key)
         if _usable(cached, options, force_backend):
