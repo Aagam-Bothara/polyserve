@@ -7,7 +7,7 @@ engine (vLLM) and the same sequences, and reports the relative change.
 
     python benchmarks/quality_check.py --model Qwen/Qwen2.5-3B-Instruct --quants bf16 fp8 awq gptq
 
-`awq` and `gptq` load the pre-quantized 4-bit checkpoint PolyServe would pick from the Hub.
+`awq`, `gptq` and `w8a8` load the pre-quantized checkpoint PolyServe would pick from the Hub.
 
 Perplexity is a weak proxy for task quality, but it is cheap, deterministic and sensitive to the
 kind of degradation weight-only quantisation causes. A gap under ~1% is normal for fp8 weights.
@@ -56,7 +56,9 @@ def perplexity(model: str, quant: Optional[str], seqs: List[List[int]], max_len:
 
     kwargs = dict(model=model, max_model_len=max_len, gpu_memory_utilization=0.85,
                   enforce_eager=True, disable_log_stats=True)
-    if quant in ("awq", "gptq"):
+    from polyserve.quantized import PREQUANTIZED
+
+    if quant in PREQUANTIZED:
         kwargs["dtype"] = "auto"  # the checkpoint's quantization_config chooses the kernel
     elif quant and quant != "bf16":
         kwargs["quantization"] = quant
@@ -114,13 +116,15 @@ def main() -> int:
     repos = {}
     for q in args.quants:
         target = args.model
-        if q in ("awq", "gptq"):
-            from polyserve.models import ModelSpec
-            from polyserve.quantized import find_int4_repos
+        from polyserve.quantized import PREQUANTIZED
 
-            repo = find_int4_repos(ModelSpec(hf_id=args.model), methods=[q]).get(q)
+        if q in PREQUANTIZED:
+            from polyserve.models import ModelSpec
+            from polyserve.quantized import find_prequantized_repos
+
+            repo = find_prequantized_repos(ModelSpec(hf_id=args.model), methods=[q]).get(q)
             if repo is None:
-                print(f"{q}: no pre-quantized 4-bit checkpoint of {args.model} on the Hub; skipped", flush=True)
+                print(f"{q}: no pre-quantized checkpoint of {args.model} on the Hub; skipped", flush=True)
                 continue
             target = repos[q] = repo.repo_id
         print(f"loading {target} at {q} ...", flush=True)

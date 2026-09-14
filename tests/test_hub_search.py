@@ -35,7 +35,7 @@ def test_search_works_with_and_without_direction():
 
 
 def test_4bit_checkpoints_are_found_on_huggingface_hub_1x():
-    found = Q.find_int4_repos(ModelSpec(hf_id="Qwen/Qwen2.5-3B-Instruct"), methods=["awq"],
+    found = Q.find_prequantized_repos(ModelSpec(hf_id="Qwen/Qwen2.5-3B-Instruct"), methods=["awq"],
                               api=Hub1x(["Qwen/Qwen2.5-3B-Instruct-AWQ"]),
                               fetch_config=lambda rid: {"quantization_config": {"quant_method": "awq", "bits": 4}})
     assert found["awq"].repo_id == "Qwen/Qwen2.5-3B-Instruct-AWQ" and found["awq"].size_bytes == 2_000_000_000

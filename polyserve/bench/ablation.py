@@ -22,7 +22,7 @@ from polyserve.calibrate.objectives import Constraints, _e2e_latency, rank
 from polyserve.calibrate.workload import Workload
 from polyserve.memory import estimate
 from polyserve.models import Config, HardwareDescriptor, ModelSpec, PreparedModel, TrialMetrics, TrialResult
-from polyserve.quantized import INT4_METHODS
+from polyserve.quantized import INT4_METHODS, PREQUANTIZED
 
 PREFIX_EXTRAS = ("cache_reuse", "kv_unified")  # llama.cpp's prefix-sharing flags
 
@@ -84,14 +84,15 @@ def strategy_variants(pick: Config, backend: BaseBackend, hw: HardwareDescriptor
 
     out: List[Variant] = []
 
-    # Weights: 4-bit against the best 8- or 16-bit precision, or the reverse.
-    if pick.quant in INT4_METHODS:
+    # Weights: a pre-quantized checkpoint against the best fp8 or 16-bit precision, or the reverse.
+    if pick.quant in PREQUANTIZED:
         alt = next((q for q in ("fp8", "bf16", "fp16") if q in model.weights_bytes), None)
         if alt:
-            out.append(fit_or_shrink(f"-int4 ({alt})", "weights", pick.model_copy(update={"quant": alt}),
+            name = "int4" if pick.quant in INT4_METHODS else pick.quant
+            out.append(fit_or_shrink(f"-{name} ({alt})", "weights", pick.model_copy(update={"quant": alt}),
                                      f"{alt} weights"))
     elif pick.quant in ("fp8", "bf16", "fp16"):
-        for q in INT4_METHODS:
+        for q in PREQUANTIZED:
             if q in model.weights_bytes:
                 out.append(variant(f"+{q}", "weights", pick.model_copy(update={"quant": q})))
 

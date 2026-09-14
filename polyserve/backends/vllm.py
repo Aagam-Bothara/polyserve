@@ -18,7 +18,7 @@ from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
 from polyserve.hardware import nvlink_between
-from polyserve.quantized import INT4_METHODS, hf_weight_options
+from polyserve.quantized import INT4_METHODS, INT8_METHODS, PREQUANTIZED, hf_weight_options
 
 # The fp8 KV-cache type offered on Ampere. It runs through FlashInfer: vLLM 0.11's default Triton
 # attention builds its fp8 kernels with e4m3, which Ampere cannot compile, whatever the cache type.
@@ -136,6 +136,7 @@ class VllmBackend(BaseBackend):
             out.append("fp8")
         if cc >= (7, 5):  # pre-quantized 4-bit checkpoints: Marlin kernels on Ampere+, plain AWQ/GPTQ on Turing
             out += list(INT4_METHODS)
+            out += list(INT8_METHODS)  # W8A8: vLLM's int8 kernels need compute capability 7.5
         return out
 
     def supported_quants(self, hw: HardwareDescriptor) -> List[str]:
@@ -227,7 +228,7 @@ class VllmBackend(BaseBackend):
             args += ["--quantization", "fp8"]
         elif cfg.quant in ("bf16", "fp16"):
             args += ["--dtype", "bfloat16" if cfg.quant == "bf16" else "float16"]
-        # awq / gptq: the checkpoint's quantization_config selects the kernel; no flag needed.
+        # awq / gptq / w8a8: the checkpoint's quantization_config selects the kernel; no flag needed.
         if cfg.kv_dtype != "auto":
             args += ["--kv-cache-dtype", cfg.kv_dtype]
         if cfg.prefix_cache is not None:
@@ -236,7 +237,7 @@ class VllmBackend(BaseBackend):
             args += ["--speculative-config", json.dumps(speculative.vllm_config(cfg.spec_decode))]
         if cfg.tp > 1:
             args += ["--tensor-parallel-size", str(cfg.tp)]
-        if model.spec.revision and cfg.quant not in INT4_METHODS:
+        if model.spec.revision and cfg.quant not in PREQUANTIZED:
             args += ["--revision", model.spec.revision]
         args += render_extra(cfg.extra, skip=("attention_backend",))
         env = {}

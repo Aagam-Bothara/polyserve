@@ -22,8 +22,8 @@ def test_auto_skips_4bit_checkpoints_unless_asked():
 
 @pytest.mark.usefixtures("no_network")
 def test_planner_prepares_4bit_only_on_request(hw_a100, spec, monkeypatch):
-    monkeypatch.setattr(Q, "find_int4_repos", lambda s, methods=Q.INT4_METHODS, **kw: {
-        m: Q.Int4Repo(repo_id=f"org/Llama-3.2-3B-Instruct-{m.upper()}", method=m, size_bytes=2_000_000_000)
+    monkeypatch.setattr(Q, "find_prequantized_repos", lambda s, methods=Q.INT4_METHODS, **kw: {
+        m: Q.PrequantizedRepo(repo_id=f"org/Llama-3.2-3B-Instruct-{m.upper()}", method=m, size_bytes=2_000_000_000)
         for m in methods})
     reg = registry()
     default = prepare_and_plan(hw_a100, spec, ["vllm"], reg)

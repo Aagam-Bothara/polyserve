@@ -138,7 +138,7 @@ def no_network(monkeypatch, llama3b_arch):
     monkeypatch.setattr(lc, "llama_server_binary", lambda: "/usr/local/bin/llama-server")
     import polyserve.quantized as qz
 
-    monkeypatch.setattr(qz, "find_int4_repos", lambda spec, **kw: {})
+    monkeypatch.setattr(qz, "find_prequantized_repos", lambda spec, **kw: {})
     yield
 
 

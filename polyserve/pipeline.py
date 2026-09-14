@@ -17,7 +17,7 @@ from polyserve.calibrate.workload import Workload, get_workload
 from polyserve.hardware import hardware_hash, llmtrace_version, probe
 from polyserve.memory import plan as memory_plan
 from polyserve.models import Config, HardwareDescriptor, MemoryEstimate, ModelSpec, PreparedModel, Profile
-from polyserve.quantized import INT4_METHODS
+from polyserve.quantized import PREQUANTIZED
 from polyserve.selector import select_backends
 
 logger = logging.getLogger(__name__)
@@ -28,14 +28,15 @@ AUTO_QUANT = "auto"
 def allowed_quants(supported: List[str], quants: Optional[List[str]]) -> Optional[List[str]]:
     """The precisions a backend may prepare under --quant. None: the backend lists none, so it decides.
 
-    `auto` (the default) is every supported precision except the Hub's 4-bit AWQ and GPTQ
-    checkpoints. On Qwen2.5 3B and 7B they raised perplexity by 26-36% where fp8 cost 1-2%, and a
-    server should not trade quality away unless asked: `--quant auto,awq` adds them back.
+    `auto` (the default) is every supported precision except the Hub's pre-quantized checkpoints:
+    4-bit AWQ and GPTQ, which on Qwen2.5 3B and 7B raised perplexity by 26-36% where fp8 cost 1-2%,
+    and 8-bit W8A8, whose quality has not been measured. A server should not trade quality away
+    unless asked: `--quant auto,awq` or `--quant auto,w8a8` adds them back.
     """
     if not supported:
         return None
     wanted = quants if quants is not None else [AUTO_QUANT]
-    return [q for q in supported if q in wanted or (AUTO_QUANT in wanted and q not in INT4_METHODS)]
+    return [q for q in supported if q in wanted or (AUTO_QUANT in wanted and q not in PREQUANTIZED)]
 
 
 @dataclass

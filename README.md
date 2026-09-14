@@ -87,7 +87,7 @@ Every step, workload and option is described in [docs/usage.md](docs/usage.md).
 | `--workload-file` | none | your own prompts, one per line of a JSONL file; `--workload` then sets only the concurrency levels and latency ceilings |
 | `--objective` | `balanced` | `throughput`, `latency`, `balanced` (throughput under a time-to-first-token ceiling), `efficiency` |
 | `--ttft-percentile` | `95` | `50` judges the ceiling on the median instead, which lets half the requests run past it |
-| `--quant` | `auto` | weight precisions to consider; 4-bit AWQ/GPTQ is opt-in with `auto,awq,gptq` |
+| `--quant` | `auto` | weight precisions to consider; the Hub's 4-bit AWQ/GPTQ and 8-bit W8A8 checkpoints are opt-in (`auto,awq,gptq,w8a8`) |
 | `--kv-quant`, `--prefix-cache`, `--speculative`, `--combine`, `--confirm` | `on` | `off` rules a search stage out |
 | `--layout` | `single` | `replicas`, `tp` or `auto` across several GPUs |
 | `--budget` | none | stop calibrating after about this long (`10m`, `1h`); the profile lists what was skipped. With a budget the variations (KV-cache type, prefix caching, speculative decoding) run straight after the precision stage, because on Dolly prompts a 10-minute budget spent in the old order stopped before them and served at stock speed |

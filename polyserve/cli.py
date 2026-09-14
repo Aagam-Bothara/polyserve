@@ -201,7 +201,7 @@ def _layout(value: str) -> str:
 def _quant_list(value: str) -> str:
     from polyserve.gguf import GGUF_QUANTS
 
-    known = {"auto", "bf16", "fp16", "fp8", "awq", "gptq", *GGUF_QUANTS}
+    known = {"auto", "bf16", "fp16", "fp8", "awq", "gptq", "w8a8", *GGUF_QUANTS}
     if value != "auto":
         bad = [q for q in value.split(",") if q.strip() not in known]
         if bad:
@@ -237,9 +237,10 @@ def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combin
 
 
 QUANT_OPT = typer.Option("auto", "--quant", callback=_quant_list,
-                         help="Weight precisions calibration may choose. auto: everything supported except 4-bit "
-                              "AWQ/GPTQ checkpoints, which cost quality (auto,awq,gptq adds them). Or a list such "
-                              "as bf16, bf16,fp8 or gptq (also fp16, Q4_K_M, Q5_K_M, Q6_K, Q8_0).")
+                         help="Weight precisions calibration may choose. auto: everything supported except the "
+                              "Hub's pre-quantized checkpoints, 4-bit AWQ/GPTQ and 8-bit W8A8, which can cost quality "
+                              "(auto,awq,gptq,w8a8 adds them). Or a list such as bf16, bf16,fp8 or gptq (also fp16, "
+                              "Q4_K_M, Q5_K_M, Q6_K, Q8_0).")
 KVQ_OPT = typer.Option("on", "--kv-quant", callback=_on_off,
                        help="Try quantized KV caches (fp8 on vLLM and SGLang, q8_0 and q4_0 on llama.cpp)")
 SPEC_OPT = typer.Option("on", "--speculative", callback=_on_off,

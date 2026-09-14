@@ -151,18 +151,18 @@ CONFIGS = {
 
 
 def test_int4_resolver_prefers_the_author_and_verifies_bits():
-    found = Q.find_int4_repos(ModelSpec(hf_id="Qwen/Qwen2.5-3B-Instruct"), api=FakeHub(), fetch_config=CONFIGS.get)
+    found = Q.find_prequantized_repos(ModelSpec(hf_id="Qwen/Qwen2.5-3B-Instruct"), api=FakeHub(), fetch_config=CONFIGS.get)
     assert found["awq"].repo_id == "Qwen/Qwen2.5-3B-Instruct-AWQ"  # the author beats a more downloaded fork
     assert found["awq"].group_size == 128 and found["awq"].size_bytes == 2_000_000_000
     assert found["gptq"].repo_id == "Qwen/Qwen2.5-3B-Instruct-GPTQ-Int4"  # the 8-bit upload is rejected
-    none = Q.find_int4_repos(ModelSpec(hf_id="org/Unrelated-Model"), api=FakeHub(), fetch_config=CONFIGS.get)
+    none = Q.find_prequantized_repos(ModelSpec(hf_id="org/Unrelated-Model"), api=FakeHub(), fetch_config=CONFIGS.get)
     assert none == {}
 
 
 @pytest.mark.usefixtures("no_network")
 def test_vllm_serves_a_4bit_checkpoint_under_a_stable_name(hw_a100, spec, monkeypatch):
-    monkeypatch.setattr(Q, "find_int4_repos", lambda s, **kw: {
-        "awq": Q.Int4Repo(repo_id="org/Llama-3.2-3B-Instruct-AWQ", method="awq", size_bytes=2_100_000_000)})
+    monkeypatch.setattr(Q, "find_prequantized_repos", lambda s, **kw: {
+        "awq": Q.PrequantizedRepo(repo_id="org/Llama-3.2-3B-Instruct-AWQ", method="awq", size_bytes=2_100_000_000)})
     be = get_backend("vllm")
     pm = be.prepare(spec, hw_a100)
     assert pm.weights_bytes["awq"] == 2_100_000_000 and pm.hf_paths == {"awq": "org/Llama-3.2-3B-Instruct-AWQ"}
@@ -177,8 +177,8 @@ def test_vllm_serves_a_4bit_checkpoint_under_a_stable_name(hw_a100, spec, monkey
 def test_precisions_track_the_gpu_generation(hw_a100):
     turing = make_hw("a100")
     turing.gpus[0].compute_capability = (7, 5)
-    assert get_backend("vllm").precisions(turing) == ["fp16", "awq", "gptq"]
-    assert get_backend("vllm").precisions(hw_a100) == ["bf16", "fp8", "awq", "gptq"]
+    assert get_backend("vllm").precisions(turing) == ["fp16", "awq", "gptq", "w8a8"]
+    assert get_backend("vllm").precisions(hw_a100) == ["bf16", "fp8", "awq", "gptq", "w8a8"]
     assert get_backend("vllm-cpu").precisions(make_hw("cpu-avx512")) == ["bf16"]
 
 
