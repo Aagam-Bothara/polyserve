@@ -17,7 +17,7 @@ import statistics
 import threading
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -461,11 +461,17 @@ def run_trial(
     warmup: bool = True,
     counter: Optional[TokenCounter] = None,
     clients: int = 1,
+    enough: Optional[Callable[[TrialMetrics], bool]] = None,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
     Every level gets fresh prompts (see _level_workload). `clients` > 1 drives each level from that
     many processes, for layouts whose combined throughput a single Python client cannot keep up with.
+
+    `enough` (see objectives.enough_level) measures the levels highest first and stops at the first one
+    it accepts: when the objective scores a trial by its throughput, a lower level cannot beat a level
+    that already meets the constraints. Re-scored this way, 115 recorded trials in six calibrations on
+    an A40 kept every score and every pick. A level keeps its own prompts whatever the order.
 
     Summary rule: tok/s and TTFT/TPOT come from the concurrency level with the highest
     throughput (that is the load the server would actually be run at); energy per token
@@ -498,7 +504,10 @@ def run_trial(
     clocks: List[float] = []
     source = "none"
 
-    for k, c in enumerate(workload.concurrencies):
+    levels = list(enumerate(workload.concurrencies))
+    if enough is not None:
+        levels.sort(key=lambda kc: -kc[1])
+    for k, c in levels:
         level = _level_workload(workload, k, counter)
         n = level.level_requests(c)
         if n < len(level.prompts):
@@ -533,6 +542,8 @@ def run_trial(
         if s.power_w is not None:
             powers.append(s.power_w)
         per_level[str(c)] = m
+        if enough is not None and m.ok and enough(m):
+            break
 
     best = max(per_level.values(), key=lambda x: x.tok_s)
     total_tokens = sum(x.output_tokens for x in per_level.values())

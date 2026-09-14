@@ -149,6 +149,21 @@ The other 12 kept their load: every real-text pick on the A40 (`extract` three t
 
 What it shows: the median hid queueing. The picks that changed were the ones served at the highest load the median allowed, and judged by the tail they serve fewer users at once. Stock settings queue worse at the tail as often as not, so the lead over stock grew in some rows and shrank in others; where it was already small against the stronger stock row it stayed a tie or became one (`rag`, and the L4 on `chat` and `sharegpt`).
 
+## Measuring the busiest level first
+
+A trial measures each of its workload's concurrency levels in turn. Under `throughput` and `balanced` it scores at its fastest level that meets the limits, and throughput rises with load, so calibration now measures the busiest level first and stops at the first level that meets them. `benchmarks/early_stop_check.py` replays six recorded calibrations on an A40 that way, keeping for each trial only the levels a top-down run would have measured:
+
+| calibration | trials | scores changed | same pick | measuring time skipped | of calibration time |
+|---|---|---|---|---|---|
+| `extract`, run 1 | 26 | 0 | yes | 18 of 32 min | 36% |
+| `extract`, run 2 | 26 | 0 | yes | 17 of 32 min | 36% |
+| `extract`, run 3 | 26 | 0 | yes | 17 of 32 min | 36% |
+| Dolly prompts | 21 | 0 | yes | 15 of 26 min | 29% |
+| Dolly prompts, `--budget 10m` | 6 | 0 | yes | 3 of 5 min | 34% |
+| SGLang on `sharegpt` | 10 | 0 | yes | 10 of 13 min | 44% |
+
+No score and no pick changed, at the 95th percentile or at the median; the skipped levels took 35% of calibration time overall. Start-up and warm-up (33–76 s a trial) are untouched, so that is the saving to expect, though it has not yet been timed on a GPU. It can misjudge a trial whose throughput falls as load rises, as n-gram speculation's did; in these tables that happened only to configurations that lost either way. `latency` and `efficiency`, which can prefer a quieter level, and calibrations with a power stage, which compare energy per token over every level, still measure all of them.
+
 ## Memory planner accuracy
 
 Each trial compares the planner's memory estimate with actual allocations reported by NVML and the backend's startup log. Run `polyserve memory-report` to see the comparison, or add `--apply` to fit the planner's constants to your machine.
@@ -190,4 +205,4 @@ These are gaps, not claims. In rough order of how much they would change the con
 6. **Disaggregated prefill and decode at a scale where it could pay.** On two PCIe-linked A40s with a 3B model it ran end to end but lost to one engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), and one of the two pairs tried failed a quarter of its requests with KV blocks the decode engine never pulled. Published gains come from larger models, NVLink or RDMA between the engines, and heavier prefill contention, none of which was available here.
 7. **Speculative decoding by load.** On real text on the A40 (vLLM 0.29, fp8 cache on FlashInfer) n-gram speculation made one user up to 80% faster and collapsed from four users up; on the L4 (vLLM 0.11, native fp8 cache) it neither helped nor collapsed on `sharegpt`. Which part of the A40 setup causes the collapse is unmeasured. A draft model paid on `extract`. A server that switches speculation on only at low load would get the single-user gain without the collapse; PolyServe picks one setting per workload. llama.cpp's `ngram-mod` has not been measured on real text.
 8. **Memory outside vLLM's reservation.** At batch 512 with the fp8 cache and 95% memory utilization, vLLM 0.11 ran out of memory at start-up twice; vLLM 0.29 started that shape every time it was tried. The planner does not model that memory, and the evidence gives no single size for it, so calibration now retries such a failure with 5 points less memory reserved (down to 0.85) instead. A planner term would need start-up logs from several engine versions.
-9. **A calibration judged at p95.** The [p95 numbers](#judged-at-the-95th-percentile) are re-scored from runs that picked by the median. The p95 rule, tuning every engine within 10% of the leader, and the budget's new order have run in tests only.
+9. **A calibration judged at p95.** The [p95 numbers](#judged-at-the-95th-percentile) are re-scored from runs that picked by the median. The p95 rule, tuning every engine within 10% of the leader, the budget's new order and measuring the busiest level first have run in tests and replays only.

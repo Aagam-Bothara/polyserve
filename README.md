@@ -101,7 +101,7 @@ The full CLI is in [docs/usage.md](docs/usage.md#cli).
 - The later search stages tune every engine within 10% of the leader after the batch stage; one further behind is never tried with the options that later helped the leader. This, the budget's new order and the p95 rule have run in tests only, not yet in a calibration on a GPU.
 - Calibration never evaluates answer quality. The quality results above come from a separate script, run by hand, on one task (GSM8K) and one model family.
 - Measured on one model family (Qwen2.5) and three machines.
-- Calibration takes tens of minutes per workload. `--budget 10m` caps it; whether the new order finds the variations that paid on real text (the fp8 cache, a draft model) inside ten minutes is unmeasured.
+- Calibration takes tens of minutes per workload. Each trial now measures its busiest level first and stops once one meets the objective; replayed over six recorded calibrations, that cuts about a third of the time (29–44%) without changing a pick, but it has not been timed on a GPU. `--budget 10m` caps it further; whether the new order finds the variations that paid on real text (the fp8 cache, a draft model) inside ten minutes is unmeasured.
 
 What is still unmeasured, in order of how much it could change the conclusions: [docs/benchmarks.md](docs/benchmarks.md#not-yet-measured).
 

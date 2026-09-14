@@ -127,6 +127,30 @@ def _score_and_constraint(
     raise ValueError(f"unknown objective {objective!r}; choose from {OBJECTIVES}")
 
 
+def enough_level(objective: str, cons: Optional[Constraints] = None) -> Optional[Callable[[TrialMetrics], bool]]:
+    """Whether one concurrency level settles a trial's score, for measuring levels highest first.
+
+    `throughput` and `balanced` score a trial by the tok/s of its best level that meets the
+    constraints, and tok/s rises with load, so no lower level can beat the first one that meets
+    them. (Not always: n-gram speculation lost throughput as load rose, but only on configurations
+    that lost anyway.) `latency` and `efficiency` can prefer a lower level, so they need every one
+    measured: None.
+    """
+    if objective not in ("throughput", "balanced"):
+        return None
+    cons = cons or Constraints()
+    _, violation = _score_and_constraint(objective, cons, [])
+    tpot_ceiling = cons.tpot_ceiling_ms
+
+    def enough(m: TrialMetrics) -> bool:
+        if not m.ok or violation(m) > 0:
+            return False
+        tpot = m.tpot_ms if (m.tpot_ms is not None and math.isfinite(m.tpot_ms)) else 0.0
+        return tpot_ceiling is None or tpot <= tpot_ceiling
+
+    return enough
+
+
 def _sort_key(x: Ranked) -> Tuple[bool, float, float]:
     return (not x.feasible, x.violation if not x.feasible else 0.0, x.score)
 

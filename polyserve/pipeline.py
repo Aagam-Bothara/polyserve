@@ -310,6 +310,8 @@ def calibrate(
     elif power_mode != "off":
         controller, points, power_notes = setup_power(hw, power_mode, power_controller)
     if runner is None:
+        from polyserve.calibrate.objectives import enough_level
+
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},
             models=plan.prepared,
@@ -317,6 +319,9 @@ def calibrate(
             workload=workload,
             log_dir=log_dir or (profile_cache.logs_dir() / spec.safe_id),
             power=controller,
+            # Highest load first, stopping once a level settles the score. Not with a power stage: it
+            # compares energy per token, which is averaged over every level measured.
+            enough=None if points else enough_level(objective, constraints),
         )
     from polyserve.predict import Predictor
 
