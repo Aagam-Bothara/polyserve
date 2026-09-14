@@ -159,7 +159,7 @@ class Config(BaseModel):
     prefill_budget: Optional[int] = None
     kv_dtype: str = "auto"
     prefix_cache: Optional[bool] = None  # None = the engine default (on for vLLM and SGLang)
-    spec_decode: Optional[str] = None  # speculative decoding: "ngram:<k>" | "draft:<hf_id>:<k>"
+    spec_decode: Optional[str] = None  # speculative decoding: "ngram|ngram_gpu|suffix:<k>" | "draft:<hf_id>:<k>"
     tp: int = 1  # tensor-parallel degree across GPUs
     extra: Dict[str, Any] = Field(default_factory=dict)
     # Energy tuning, applied through NVML while the backend runs rather than as launch flags.

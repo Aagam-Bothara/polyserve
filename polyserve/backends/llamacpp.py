@@ -204,6 +204,8 @@ class LlamaCppBackend(BaseBackend):
             if not modern:
                 raise RuntimeError("this llama-server has no built-in n-gram speculative decoding")
             return ["--spec-type", "ngram-mod", "--spec-ngram-mod-n-max", str(k)]
+        if kind != "draft":
+            raise RuntimeError(f"llama.cpp has no {kind} speculative decoding")
         draft_path = model.draft_paths.get(draft or "")
         if not draft_path or draft_path.startswith(("hf://", "convert://")):
             raise RuntimeError(f"draft model for {spec} not materialized")

@@ -157,7 +157,10 @@ class VllmBackend(BaseBackend):
         return (16, 64, 256, 512)
 
     def spec_variants(self, cfg: Config, model: PreparedModel) -> List[Config]:
-        specs = [speculative.ngram()]
+        # n-gram lookup on the GPU where vLLM has it, since the CPU proposer turns async scheduling off.
+        specs = [speculative.ngram_gpu() if speculative.vllm_supports_ngram_gpu() else speculative.ngram()]
+        if speculative.vllm_supports_suffix():
+            specs.append(speculative.suffix())
         draft = speculative.draft_for(model.spec.hf_id)
         if draft and speculative.vllm_supports_draft():
             specs.append(speculative.draft(draft, speculative.DRAFT_TOKENS_VLLM))
