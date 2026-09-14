@@ -94,6 +94,7 @@ def test_with_a_budget_an_engine_behind_after_stage_one_gets_the_variations_too(
     runner = ClockRunner(lambda c: {"vllm": 471.0, "sglang": 490.0}[c.backend] * (1.25 if c.spec_decode else 1.0))
     search = StagedSearch(objective="throughput", runner=runner, budget_s=300, clock=lambda: clock["now"],
                           variant_stages=[("kv", kv), ("spec", spec)])
-    winner, _ = search.run([VLLM, SGLANG])
+    winner, notes = search.run([VLLM, SGLANG])
     assert winner.config.backend == "vllm" and winner.config.spec_decode == "ngram:4"
     assert [s for s, _ in runner.ran] == ["quant", "quant", "kv", "kv", "spec"]
+    assert sum("came within" in n for n in notes) == 1  # asked after stage 1 and again after the batch stage

@@ -24,8 +24,9 @@ from polyserve.quantized import INT4_METHODS, INT8_METHODS, PREQUANTIZED, hf_wei
 # attention builds its fp8 kernels with e4m3, which Ampere cannot compile, whatever the cache type.
 AMPERE_FP8_KV = "fp8_e5m2"
 # int8 with a scale per token and head, computed at run time (no calibration data). In vLLM 0.29 it is
-# one of Triton attention's cache types, with no compute-capability limit, so it runs on Ampere cards
-# that have no FlashInfer; earlier releases were not checked.
+# one of Triton attention's cache types; earlier releases were not checked. It is offered from Ada on:
+# on an A40 it started but lost to the unquantized cache (398 against 444 tok/s at 8 users on `extract`,
+# with a slower tail) and to fp8_e5m2 (538), so on Ampere it would only cost a trial. Ada is untested.
 INT8_KV = "int8_per_token_head"
 INT8_KV_FROM = (0, 29)
 # Cache types that need a particular attention backend.
@@ -160,7 +161,7 @@ class VllmBackend(BaseBackend):
             out.append("fp8")
         elif cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None:  # Ampere, via FlashInfer
             out.append(AMPERE_FP8_KV)
-        if cc >= (8, 0) and _vllm_version() >= INT8_KV_FROM:
+        if cc >= (8, 9) and _vllm_version() >= INT8_KV_FROM:
             out.append(INT8_KV)
         return out
 

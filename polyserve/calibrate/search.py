@@ -322,6 +322,7 @@ class StagedSearch:
     _started: Optional[float] = None
     _trial_seconds: List[float] = field(default_factory=list)
     _skipped: List[str] = field(default_factory=list)
+    _noted_contenders: set = field(default_factory=set)
 
     # ---- predictor helpers
 
@@ -674,8 +675,10 @@ class StagedSearch:
             if (self.contender_band > 0 and lead.feasible and x.feasible
                     and x.score - lead.score <= self.contender_band * abs(lead.score)):
                 out.append(x.result.config)
-                self.notes.append(f"{backend} came within {self.contender_band:.0%} of the leading "
-                                  f"{lead.result.config.backend} after {after}, so it was tuned as well")
+                if backend not in self._noted_contenders:  # a budgeted run asks twice; say it once
+                    self._noted_contenders.add(backend)
+                    self.notes.append(f"{backend} came within {self.contender_band:.0%} of the leading "
+                                      f"{lead.result.config.backend} after {after}, so it was tuned as well")
         return out
 
     def _tune(self, base: Config) -> None:

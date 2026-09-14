@@ -19,17 +19,17 @@ def _flashinfer(monkeypatch, present: bool) -> None:
                         lambda name, *a: (object() if present else None) if name == "flashinfer" else real(name, *a))
 
 
-def test_offered_from_vllm_029_on_ampere_and_newer(monkeypatch, hw_a100):
+def test_offered_from_vllm_029_on_ada_and_newer(monkeypatch, hw_a100):
     vllm = get_backend("vllm")
     monkeypatch.setattr(vl, "_vllm_version", lambda: (0, 29))
-    _flashinfer(monkeypatch, False)
-    assert vllm.kv_dtypes(hw_a100) == [vl.INT8_KV]  # Ampere without FlashInfer now has a quantized cache
-    _flashinfer(monkeypatch, True)
-    assert vllm.kv_dtypes(hw_a100) == [vl.AMPERE_FP8_KV, vl.INT8_KV]
     assert vllm.kv_dtypes(make_hw("rtx4090")) == ["fp8", vl.INT8_KV]
+    _flashinfer(monkeypatch, True)
+    assert vllm.kv_dtypes(hw_a100) == [vl.AMPERE_FP8_KV]  # it lost on an A40, so Ampere is not offered it
+    _flashinfer(monkeypatch, False)
+    assert vllm.kv_dtypes(hw_a100) == []
     assert vllm.kv_dtypes(make_hw("gtx1080")) == []
     monkeypatch.setattr(vl, "_vllm_version", lambda: (0, 11))
-    assert vllm.kv_dtypes(hw_a100) == [vl.AMPERE_FP8_KV]
+    assert vllm.kv_dtypes(make_hw("rtx4090")) == ["fp8"]
 
 
 def test_it_launches_with_triton_attention(monkeypatch, prepared_vllm):

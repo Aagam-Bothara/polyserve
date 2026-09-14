@@ -100,16 +100,35 @@ def _winner_key(p: Profile) -> str:
     return f"{p.config.key()} x{p.replicas}" if p.replicas > 1 else p.config.key()
 
 
-def _progress(stage: str, cfg, res) -> None:
+def _progress_line(stage: str, cfg, res, objective: Optional[str] = None, cons=None) -> str:
+    """One calibration trial as the progress log shows it: while it runs, then its result. With an objective,
+    the result is the level the objective scores it at, not its fastest level, which may break the limits:
+    on an L4 a trial printed as 695 tok/s counted at 219, because 32 users broke the p95 ceiling."""
     if res is None:
-        err.print(f"[cyan]{stage:>7}[/] {cfg.key()} ...")
-    else:
-        m = res.metrics
-        if res.ok:
-            err.print(f"[green]{stage:>7}[/] {cfg.key()}  {m.tok_s:.1f} tok/s  TTFT {_fmt(m.ttft_ms, 0)} ms"
-                      f"{'  ' + _fmt(m.joules_per_token, 3) + ' J/tok' if m.joules_per_token else ''}")
-        else:
-            err.print(f"[red]{stage:>7}[/] {cfg.key()}  FAILED: {(res.error or '').splitlines()[0][:80]}")
+        return f"[cyan]{stage:>7}[/] {cfg.key()} ..."
+    if not res.ok:
+        return f"[red]{stage:>7}[/] {cfg.key()}  FAILED: {(res.error or '').splitlines()[0][:80]}"
+    m, verdict = res.metrics, ""
+    if objective is not None:
+        from polyserve.calibrate.objectives import rank
+
+        ranked = rank([res], objective, cons)
+        if ranked:
+            m = ranked[0].metrics
+            verdict = "" if ranked[0].feasible else "  [yellow]breaks the limits at every level[/]"
+    p95 = f" (p95 {_fmt(m.ttft_p95_ms, 0)})" if m.ttft_p95_ms is not None else ""
+    energy = f"  {_fmt(m.joules_per_token, 3)} J/tok" if m.joules_per_token else ""
+    return (f"[green]{stage:>7}[/] {cfg.key()}  {m.tok_s:.1f} tok/s at {m.concurrency} users  "
+            f"TTFT {_fmt(m.ttft_ms, 0)} ms{p95}{energy}{verdict}")
+
+
+def _progress(stage: str, cfg, res) -> None:
+    err.print(_progress_line(stage, cfg, res))
+
+
+def _progress_for(objective: str, cons):
+    """A progress printer that reports each trial at the level the objective scores it."""
+    return lambda stage, cfg, res: err.print(_progress_line(stage, cfg, res, objective, cons))
 
 
 def _workload(name: str, file: Optional[Path] = None):
@@ -412,19 +431,19 @@ def bench(
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
-    profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=_progress,
+    profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=_progress_for(objective, cons),
                         power_mode=power, options=opts)
     if phases != "unified":
         from polyserve.disagg import calibrate_disaggregated
 
         profile = calibrate_disaggregated(hw, spec, objective, profile, reg, workload=wl, constraints=cons,
-                                          phases=phases, connector=kv_connector, progress=_progress,
+                                          phases=phases, connector=kv_connector, progress=_progress_for(objective, cons),
                                           power_mode=power)
     if layout != "single":
         from polyserve.layout import calibrate_layout
 
         profile = calibrate_layout(hw, objective, profile, reg, layout, workload=wl, constraints=cons,
-                                   progress=_progress)
+                                   progress=_progress_for(objective, cons))
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
     if save:
@@ -459,8 +478,10 @@ def recalibrate(
 
     wl = _workload(workload, workload_file)
     profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
-                              workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile),
-                              progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              workload=wl,
+                              constraints=(cons := _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling,
+                                                                ttft_percentile)),
+                              progress=_progress_for(objective, cons), on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm), layout=layout)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
@@ -507,7 +528,7 @@ def compare(
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
-                              progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              progress=_progress_for(objective, cons), hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm), layout=layout)
     _print_profile(profile)
@@ -718,8 +739,10 @@ def serve(
     wl = _workload(workload, workload_file)
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
-                              workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile),
-                              progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              workload=wl,
+                              constraints=(cons := _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling,
+                                                                ttft_percentile)),
+                              progress=_progress_for(objective, cons), on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm), layout=layout)
     _print_profile(profile)
