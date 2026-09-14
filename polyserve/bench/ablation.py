@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from polyserve.backends.base import BaseBackend
-from polyserve.backends.vllm import AMPERE_FP8_KV
+from polyserve.backends.vllm import KV_ATTENTION
 from polyserve.bench.compare import results_path
 from polyserve.calibrate.objectives import Constraints, _e2e_latency, rank
 from polyserve.calibrate.workload import Workload
@@ -98,11 +98,13 @@ def strategy_variants(pick: Config, backend: BaseBackend, hw: HardwareDescriptor
     # KV cache: without quantization the pick's batch may not fit either.
     if pick.kv_dtype != "auto":
         out.append(fit_or_shrink("-kv", "kv", pick.model_copy(update={"kv_dtype": "auto"}), "an unquantized cache"))
-        if pick.backend == "vllm" and pick.kv_dtype == AMPERE_FP8_KV:
-            # On Ampere the fp8 cache also moves attention to FlashInfer; this separates the two effects.
-            flashinfer = pick.model_copy(update={"kv_dtype": "auto",
-                                                 "extra": {**pick.extra, "attention_backend": "FLASHINFER"}})
-            out.append(fit_or_shrink("-kv (FlashInfer kept)", "kv", flashinfer, "an unquantized cache"))
+        attention = KV_ATTENTION.get(pick.kv_dtype) if pick.backend == "vllm" else None
+        if attention:
+            # The cache type also chose the attention backend (FlashInfer for fp8 on Ampere, Triton for int8);
+            # this separates the two effects.
+            kept = pick.model_copy(update={"kv_dtype": "auto", "extra": {**pick.extra, "attention_backend": attention}})
+            name = {"FLASHINFER": "FlashInfer", "TRITON_ATTN": "Triton"}.get(attention, attention)
+            out.append(fit_or_shrink(f"-kv ({name} kept)", "kv", kept, "an unquantized cache"))
     else:
         for kd in backend.kv_dtypes(hw):
             out.append(variant(f"+kv:{kd}", "kv", pick.model_copy(update={"kv_dtype": kd})))

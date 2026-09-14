@@ -31,9 +31,11 @@ def dtype_bytes(name: str) -> int:
     return DTYPE_BYTES.get(name.lower(), 2)
 
 
-# Bytes per KV element for llama.cpp's block-quantized caches: 32 values plus their scale(s).
+# Bytes per KV element for llama.cpp's block-quantized caches: 32 values plus their scale(s). vLLM's
+# int8_per_token_head keeps a scale per token and head beside one byte per value; sized here as a 4-byte
+# scale over a 64-wide head, which overstates it for wider heads (Qwen2.5's are 128).
 KV_ELEMENT_BYTES: Dict[str, float] = {"q8_0": 34 / 32, "q4_0": 18 / 32, "q4_1": 20 / 32, "q5_0": 22 / 32,
-                                      "q5_1": 24 / 32}
+                                      "q5_1": 24 / 32, "int8_per_token_head": 1 + 4 / 64}
 
 
 def kv_element_bytes(name: str) -> float:

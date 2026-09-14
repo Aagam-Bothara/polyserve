@@ -23,6 +23,13 @@ from polyserve.quantized import INT4_METHODS, hf_weight_options
 # The fp8 KV-cache type offered on Ampere. It runs through FlashInfer: vLLM 0.11's default Triton
 # attention builds its fp8 kernels with e4m3, which Ampere cannot compile, whatever the cache type.
 AMPERE_FP8_KV = "fp8_e5m2"
+# int8 with a scale per token and head, computed at run time (no calibration data). In vLLM 0.29 it is
+# one of Triton attention's cache types, with no compute-capability limit, so it runs on Ampere cards
+# that have no FlashInfer; earlier releases were not checked.
+INT8_KV = "int8_per_token_head"
+INT8_KV_FROM = (0, 29)
+# Cache types that need a particular attention backend.
+KV_ATTENTION = {AMPERE_FP8_KV: "FLASHINFER", INT8_KV: "TRITON_ATTN"}
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +154,14 @@ class VllmBackend(BaseBackend):
 
     def kv_dtypes(self, hw: HardwareDescriptor) -> List[str]:
         cc = hw.gpu.cc if hw.gpu else (0, 0)
+        out: List[str] = []
         if cc >= (8, 9):  # Ada, Hopper: e4m3
-            return ["fp8"]
-        if cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None:  # Ampere, via FlashInfer
-            return [AMPERE_FP8_KV]
-        return []
+            out.append("fp8")
+        elif cc >= (8, 0) and importlib.util.find_spec("flashinfer") is not None:  # Ampere, via FlashInfer
+            out.append(AMPERE_FP8_KV)
+        if cc >= (8, 0) and _vllm_version() >= INT8_KV_FROM:
+            out.append(INT8_KV)
+        return out
 
     def batch_ladder(self) -> Tuple[int, ...]:
         return (16, 64, 256, 512)
@@ -230,9 +240,9 @@ class VllmBackend(BaseBackend):
             args += ["--revision", model.spec.revision]
         args += render_extra(cfg.extra, skip=("attention_backend",))
         env = {}
-        # The fp8 cache on Ampere needs FlashInfer (see AMPERE_FP8_KV); extra["attention_backend"] forces a
-        # backend, so an ablation can keep FlashInfer while removing the fp8 cache.
-        attention = cfg.extra.get("attention_backend") or ("FLASHINFER" if cfg.kv_dtype == AMPERE_FP8_KV else None)
+        # Some cache types need a particular attention backend (KV_ATTENTION); extra["attention_backend"]
+        # forces one, so an ablation can keep the backend while removing the quantized cache.
+        attention = cfg.extra.get("attention_backend") or KV_ATTENTION.get(cfg.kv_dtype)
         if attention:
             env["VLLM_ATTENTION_BACKEND"] = str(attention)  # vLLM 0.11
             if _attention_backend_flag():
