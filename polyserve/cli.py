@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import signal
 import sys
 from pathlib import Path
@@ -111,12 +112,17 @@ def _progress(stage: str, cfg, res) -> None:
             err.print(f"[red]{stage:>7}[/] {cfg.key()}  FAILED: {(res.error or '').splitlines()[0][:80]}")
 
 
-def _workload(name: str):
-    from polyserve.calibrate.workload import WORKLOAD_NAMES, get_workload
+def _workload(name: str, file: Optional[Path] = None):
+    from polyserve.calibrate.workload import WORKLOAD_NAMES, get_workload, workload_from_file
 
     if name not in WORKLOAD_NAMES:
         raise typer.BadParameter(f"workload must be one of {', '.join(WORKLOAD_NAMES)}")
-    return get_workload(name)
+    if file is None:
+        return get_workload(name)
+    try:
+        return workload_from_file(file, template=get_workload(name))
+    except (OSError, ValueError) as exc:
+        raise typer.BadParameter(str(exc), param_hint="--workload-file")
 
 
 def _constraints(ttft_ceiling: Optional[float], tok_s_floor: Optional[float], workload=None,
@@ -148,6 +154,10 @@ def _power_controller(profile: Profile):
 
 
 WORKLOAD_OPT = typer.Option("default", "--workload", "-w", help="Workload preset; see `polyserve workloads`")
+WORKLOAD_FILE_OPT = typer.Option(
+    None, "--workload-file",
+    help="Calibrate on your own prompts: a JSONL file with one prompt per line, as a string, {\"prompt\": ...} or "
+         "{\"messages\": [...]}. --workload then sets only the concurrency levels and latency ceilings.")
 POWER_OPT = typer.Option(
     "off", "--power", callback=_power_mode,
     help="Energy tuning: off | cap (power limit) | clock (locked SM clock) | both. Needs root; machine-wide; "
@@ -198,13 +208,24 @@ def _quant_list(value: str) -> str:
     return value
 
 
-def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on"):
+def _duration(value: Optional[str]) -> Optional[float]:
+    """Seconds from '90s', '10m', '1h' or a plain number of seconds."""
+    if value is None:
+        return None
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", str(value))
+    if not m or float(m.group(1)) <= 0:
+        raise typer.BadParameter("expected a duration such as 90s, 10m or 1h")
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
+def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
+          budget: Optional[float] = None):
     from polyserve.pipeline import SearchOptions
 
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
         kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
-        combine=combine == "on",
+        combine=combine == "on", budget_s=budget,
     )
 
 
@@ -225,6 +246,10 @@ COMBINE_OPT = typer.Option("on", "--combine", callback=_on_off,
                            help="After tuning one setting at a time, measure the leader with each adopted "
                                 "change undone, then combinations of the settings that came close on their "
                                 "own (up to 8 extra trials in all)")
+BUDGET_OPT = typer.Option(None, "--budget", callback=_duration,
+                          help="Stop calibrating after about this long (90s, 10m, 1h). Stages run most valuable "
+                               "first; later trials are skipped, the best so far wins, and the profile lists what "
+                               "was skipped.")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 
 
@@ -292,13 +317,14 @@ def plan(
     model: str,
     backend: Optional[str] = typer.Option(None, "--backend", help="Force one backend"),
     workload: str = WORKLOAD_OPT,
+    workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Print feasible configs (after the memory planner) without running them."""
     from polyserve.hardware import probe as _probe
     from polyserve.pipeline import prepare_and_plan, select
 
-    wl = _workload(workload)
+    wl = _workload(workload, workload_file)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend)
@@ -336,6 +362,7 @@ def bench(
     model: str,
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
+    workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None, help="latency/efficiency: absolute tok/s floor"),
@@ -350,20 +377,21 @@ def bench(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from polyserve import cache as profile_cache
     from polyserve.hardware import probe as _probe
     from polyserve.pipeline import calibrate, prepare_and_plan, select
 
-    wl = _workload(workload)
+    wl = _workload(workload, workload_file)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend)
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
@@ -392,6 +420,7 @@ def recalibrate(
     model: str,
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
+    workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
@@ -405,16 +434,17 @@ def recalibrate(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from polyserve.pipeline import resolve_profile
 
-    wl = _workload(workload)
+    wl = _workload(workload, workload_file)
     profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget), layout=layout)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
 
@@ -424,10 +454,14 @@ def compare(
     model: str,
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
+    workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     backend: Optional[str] = typer.Option(None, "--backend", help="Restrict PolyServe's candidates to one backend"),
     ollama_model: Optional[str] = typer.Option(None, "--ollama-model", help="Ollama tag for the ollama row"),
     include: Optional[List[str]] = typer.Option(None, "--include", help="Only these reference rows"),
     out: Optional[Path] = typer.Option(None, "--out", help="Results directory (default benchmarks/results)"),
+    repeats: int = typer.Option(1, "--repeats", min=1,
+                                help="Measure every row this many times, interleaved, and report the median and "
+                                     "the spread; rows whose runs overlap PolyServe's are flagged as within noise"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
     tok_s_floor: Optional[float] = typer.Option(None),
     power: str = POWER_OPT,
@@ -440,6 +474,7 @@ def compare(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from polyserve.bench import compare as _compare, to_markdown
@@ -447,18 +482,18 @@ def compare(
     from polyserve.hardware import probe as _probe
     from polyserve.pipeline import prepare_and_plan, resolve_profile, select
 
-    wl = _workload(workload)
+    wl = _workload(workload, workload_file)
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget), layout=layout)
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
-                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine).quants)
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -474,7 +509,7 @@ def compare(
     result = _compare(hw, spec, profile, planned.prepared, reg, workload=wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
                       log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{wl.name}",
-                      power=_power_controller(profile))
+                      power=_power_controller(profile), repeats=repeats)
     path = save(result, out)
     console.print(to_markdown(result))
     console.print(f"[dim]saved {path}[/]")
@@ -497,6 +532,7 @@ def report(
 def predict(
     model: str,
     workload: str = WORKLOAD_OPT,
+    workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     backend: Optional[str] = typer.Option(None, "--backend"),
     top: int = typer.Option(20, "--top", help="Rows to show"),
 ) -> None:
@@ -505,7 +541,7 @@ def predict(
     from polyserve.pipeline import prepare_and_plan, select
     from polyserve.predict import Predictor
 
-    wl = _workload(workload)
+    wl = _workload(workload, workload_file)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
     candidates, reg = select(hw, spec, force=backend)
@@ -630,6 +666,7 @@ def serve(
     model: str,
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
+    workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     port: int = typer.Option(8000, "--port"),
     host: str = typer.Option("0.0.0.0", "--host"),
     backend: Optional[str] = typer.Option(None, "--backend", help="Force a backend by name"),
@@ -646,6 +683,7 @@ def serve(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -655,13 +693,13 @@ def serve(
     from polyserve.pipeline import resolve_profile
     from polyserve.serve import Supervisor, create_app
 
-    wl = _workload(workload)
+    wl = _workload(workload, workload_file)
     spec = ModelSpec(hf_id=model)
     profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget), layout=layout)
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")

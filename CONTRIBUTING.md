@@ -25,7 +25,7 @@ Implement the `Backend` interface in [docs/usage.md](docs/usage.md#backend-inter
 
 A number goes into [docs/benchmarks.md](docs/benchmarks.md) only if it was measured like this:
 
-1. PolyServe's pick against stock settings on the same card, minutes apart: `polyserve compare <model> --workload W`.
+1. PolyServe's pick against stock settings on the same card, minutes apart: `polyserve compare <model> --workload W`. For any gain under about 10%, add `--repeats 3`: rows are measured interleaved, and a gain whose runs overlap the stock row's is flagged as within noise.
 2. What each strategy was worth, flipped one at a time and measured back to back: `benchmarks/ablate_strategies.py`.
 3. Any change of weights checked for quality: `benchmarks/task_quality.py` (GSM8K, paired against bf16).
 4. The raw JSON committed under `benchmarks/strategies/`, and `SUMMARY.md` regenerated with `benchmarks/summarize_strategies.py` (the command is in its docstring).

@@ -36,7 +36,7 @@ curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"Qwen/Qwen2.5-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-The first launch calibrates, which takes 20–45 minutes, and caches the result per machine, model, objective and workload. Later launches serve at once. `--skip-calibration` serves the first candidate with default settings. For llama.cpp, build `llama-server` with CUDA and put it on `PATH` or in `LLAMA_SERVER`.
+The first launch calibrates, which takes 20–45 minutes, and caches the result per machine, model, objective and workload. Later launches serve at once. To tune for your own traffic instead of a preset, pass a sample of it: `--workload-file prompts.jsonl`. `--skip-calibration` serves the first candidate with default settings. For llama.cpp, build `llama-server` with CUDA and put it on `PATH` or in `LLAMA_SERVER`.
 
 With Docker. The image builds on the official vLLM image; CI builds the same Dockerfile on a slim Python base to check its steps, but not the full vLLM image:
 
@@ -80,20 +80,22 @@ Every step, workload and option is described in [docs/usage.md](docs/usage.md).
 | Option | Default | Choices |
 |---|---|---|
 | `--workload` | `default` | `chat`, `generation`, `rag`, `long-context`, `high-concurrency`, shared-prefix `chat-system` and `rag-shared`, real-text `sharegpt`, `extract` and `code-edit` |
+| `--workload-file` | none | your own prompts, one per line of a JSONL file; `--workload` then sets only the concurrency levels and latency ceilings |
 | `--objective` | `balanced` | `throughput`, `latency`, `balanced` (throughput under a time-to-first-token ceiling), `efficiency` |
 | `--quant` | `auto` | weight precisions to consider; 4-bit AWQ/GPTQ is opt-in with `auto,awq,gptq` |
 | `--kv-quant`, `--prefix-cache`, `--speculative`, `--combine` | `on` | `off` rules a search stage out |
 | `--layout` | `single` | `replicas`, `tp` or `auto` across several GPUs |
+| `--budget` | none | stop calibrating after about this long (`10m`, `1h`); the later, less valuable trials are skipped and the profile lists them |
 
 The full CLI is in [docs/usage.md](docs/usage.md#cli).
 
 ## Limits
 
 - Against someone who already picks the right precision and flags, the rest of the search is worth a few percent, except where content decides, as on `extract`.
-- Never run on real hardware: SGLang, vLLM-CPU, pre-Turing GPUs, and `--power`, which has only run against a simulated NVML.
+- Never run on real hardware: SGLang, vLLM-CPU, pre-Turing GPUs, `--power` (only against a simulated NVML), and `--workload-file`, which is new and drives the same real-text harness that has.
 - Calibration never evaluates answer quality. The quality results above come from a separate script, run by hand, on one task (GSM8K) and one model family.
 - Measured on one model family (Qwen2.5) and three machines.
-- Calibration takes tens of minutes per workload.
+- Calibration takes tens of minutes per workload; `--budget 10m` caps it by skipping the later, less valuable trials.
 
 What is still unmeasured, in order of how much it could change the conclusions: [docs/benchmarks.md](docs/benchmarks.md#not-yet-measured).
 

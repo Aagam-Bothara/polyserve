@@ -61,6 +61,22 @@ In the two shared-prefix presets every prompt starts with the same text, which i
 
 The last three use real text, downloaded from the Hub on first use, and let the model stop when it is done instead of forcing a fixed answer length. They exist for strategies whose value depends on content: n-gram speculation pays when the answer repeats the prompt, as extraction and code edits do, and random words cannot show that.
 
+#### Your own prompts
+
+The measured results say the best settings depend on what the traffic contains (a draft model added 66% on `extract` and nothing on `sharegpt`), so the most faithful workload is a sample of your own. Pass one with `--workload-file`:
+
+```bash
+polyserve serve Qwen/Qwen2.5-3B-Instruct --workload chat --workload-file prompts.jsonl
+```
+
+- The file is JSONL, one prompt per line: a JSON string, `{"prompt": "..."}`, `{"text": "..."}` or `{"messages": [{"role": "user", "content": "..."}]}`. A conversation's messages are joined in order; no chat template is applied, as with the built-in real-text presets. A bad line is reported with its line number.
+- `--workload` becomes a template: its concurrency levels and latency ceilings apply, and answers stop when the model does, up to 512 tokens.
+- The profile's name includes a hash of the file, so editing the file triggers a fresh calibration instead of reusing a profile tuned for the old prompts.
+- Every concurrency level gets prompts of its own, so no level measures a prefix cache an earlier level filled. A file with too few prompts for that sends fewer requests per level and says so; a few hundred prompts is plenty for the presets' levels.
+- `benchmarks/ablate_strategies.py --workload-file` breaks the resulting pick down by strategy, as for the presets.
+
+This is new and so far exercised by tests only; it drives the same real-text harness as `sharegpt`, `extract` and `code-edit`, which has run on GPUs.
+
 Prompt lengths are exact when the model's tokenizer is available (prompts are fitted to the target token count), and output tokens are counted from the server's `usage` or the tokenizer, never from stream chunks. The planner drops any config whose context cannot hold prefill + decode.
 
 ```bash
@@ -127,6 +143,7 @@ The [benchmarks](benchmarks.md) show where the GPU gain comes from: fewer bytes 
 | `--speculative on\|off` | `on` | Speculative decoding: n-gram lookup, which needs no second model, on vLLM and on recent llama.cpp builds (`--spec-type ngram-mod`), and a small draft model of the same family (for example Qwen2.5-0.5B for the larger Qwen2.5 models, Llama-3.2-1B for Llama 3.x) on llama.cpp, and on vLLM 0.29, where it started and served in a smoke test (vLLM 0.11 rejects a separate draft model). Measured on an A40, the two engines disagreed. vLLM's n-gram lookup, which matches only the prompt, lost at every concurrency from 1 to 64 and was never picked. llama.cpp's `ngram-mod`, which also matches text the model has already generated, won on `chat-system`: time per token fell from 16.3 to 6.8 ms. These synthetic answers probably repeat themselves more than real ones, so treat that gain as an upper bound. The Qwen2.5-0.5B draft model on llama.cpp lost 34% in a smoke test. |
 | `--layout single\|replicas\|tp\|auto` | `single` | Multi-GPU arrangement. `replicas` runs one engine per GPU behind a least-outstanding-requests load balancer; `tp` shards one engine across the GPUs with tensor parallelism (vLLM, SGLang). `auto` measures both against the single-GPU winner and keeps the best. Replicas and tensor parallel are compared through the same balancer and workload, and a replicas profile is served by the balancer on `:8000`. On GPUs without NVLink, tensor-parallel launches set `NCCL_P2P_DISABLE=1` and `--disable-custom-all-reduce`; without both, vLLM hung at start-up on a pair of A40s. Measured there: two replicas gave 1.74× one GPU on `high-concurrency`, and tensor parallel over PCIe was slower than one GPU. |
 | `--combine on\|off` | `on` | After the one-setting-at-a-time stages, first measure the leader with each change it adopted undone, then combinations of the changes that came within 5% of the leader on their own (at most one value per setting, up to 8 trials in all, best estimated gain first). One setting at a time missed llama.cpp's `--kv-unified` with n-gram speculation, a pair that measured 12.7% better than the pick, and on `extract` it adopted the fp8 KV cache before a draft model that ran 19% faster without it; this stage looks for both, and on a rerun of `extract` it found the second, 19% faster than the earlier pick. |
+| `--budget 90s\|10m\|1h` | none | Stop starting trials once a typical trial would end past the budget. The stages above run in order of value (precision, memory, batch, then variations, then combinations), so a budget cuts the least valuable trials; at least one trial always runs, the best so far wins, and the profile's notes list what was skipped. A budgeted profile is cached under its own name, so it is never served where a full calibration was asked for. |
 
 A profile records any non-default options and is cached under its own name, so a `--quant bf16` profile is never served to a caller who asked for `auto`. `--layout` and `--phases` both use the extra GPUs, so only one of them can be set.
 
@@ -136,8 +153,8 @@ To see whether quantized weights cost quality on your model, run `benchmarks/tas
 ## CLI
 
 ```
-polyserve serve <model> [--objective X] [--workload W] [--phases MODE] [--power MODE] [--tpot-ceiling MS] [--port N] [--backend NAME] [--skip-calibration]
-                [--quant auto|LIST] [--kv-quant on|off] [--prefix-cache on|off] [--speculative on|off] [--layout MODE] [--combine on|off]
+polyserve serve <model> [--objective X] [--workload W] [--workload-file F] [--phases MODE] [--power MODE] [--tpot-ceiling MS] [--port N] [--backend NAME] [--skip-calibration]
+                [--quant auto|LIST] [--kv-quant on|off] [--prefix-cache on|off] [--speculative on|off] [--layout MODE] [--combine on|off] [--budget 10m]
 polyserve probe                 # print HardwareDescriptor
 polyserve workloads             # list workload presets
 polyserve plan <model>          # print feasible configs without running them
@@ -145,6 +162,7 @@ polyserve bench <model>         # run calibration and print the table, don't ser
 polyserve recalibrate <model>   # force a rerun and overwrite the cached profile
 polyserve profiles              # list cached profiles
 polyserve compare <model>       # PolyServe's pick vs stock defaults vs Ollama, one workload -> results JSON
+                                #   --repeats 3: every row measured 3x interleaved; median, spread, noise flags
 polyserve report                # aggregate results: median gain over the best SLO-meeting default + plot
 polyserve memory-report [--apply]  # planner prediction vs measured peak memory; --apply fits workspace + margin
 polyserve predict <model>       # predicted tok/s / TTFT for every feasible config, no launches

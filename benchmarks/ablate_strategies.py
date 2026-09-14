@@ -25,7 +25,7 @@ from polyserve.bench.ablation import (
     sweep_workload,
 )
 from polyserve.calibrate.search import SubprocessTrialRunner
-from polyserve.calibrate.workload import get_workload
+from polyserve.calibrate.workload import get_workload, workload_from_file
 from polyserve.hardware import hardware_hash, probe
 from polyserve.models import Config, ModelSpec
 from polyserve.pipeline import prepare_and_plan, select
@@ -61,6 +61,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--workloads", nargs="+", default=["default"])
+    ap.add_argument("--workload-file", type=Path, default=None,
+                    help="your own prompts (JSONL), as for `polyserve compare`; the first --workloads name is the "
+                         "template for concurrency and latency ceilings")
     ap.add_argument("--objective", default="balanced")
     ap.add_argument("--results", type=Path, default=Path("benchmarks/results"))
     ap.add_argument("--out", type=Path, default=Path("benchmarks/ablation"))
@@ -78,8 +81,10 @@ def main() -> int:
     spec = ModelSpec(hf_id=args.model)
     args.out.mkdir(parents=True, exist_ok=True)
     failures = 0
-    for wl_name in args.workloads:
-        wl = get_workload(wl_name)
+    workloads = ([workload_from_file(args.workload_file, get_workload(args.workloads[0]))] if args.workload_file
+                 else [get_workload(n) for n in args.workloads])
+    for wl in workloads:
+        wl_name = wl.name
         cons = constraints_for(wl)
         pick = load_pick(args.results, args.model, wl_name, args.objective, hw_hash)
         if pick is None:

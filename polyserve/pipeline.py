@@ -68,6 +68,7 @@ class SearchOptions:
     prefix_cache: bool = True  # keep prefix caching on, and tune it for shared-prefix workloads
     phase_tuning: bool = True  # the prefill-knob stage
     combine: bool = True  # combinations of the strategies that were promising on their own
+    budget_s: Optional[float] = None  # --budget: seconds of calibration, after which later trials are skipped
 
     def key(self) -> Dict[str, str]:
         """Non-default options, recorded in the profile and in its cache path."""
@@ -84,6 +85,8 @@ class SearchOptions:
             out["prefill"] = "off"
         if not self.combine:
             out["combine"] = "off"
+        if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
+            out["budget"] = f"{int(self.budget_s)}s"
         return out
 
     def allows(self, quant: str) -> bool:
@@ -313,6 +316,7 @@ def calibrate(
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
+                          budget_s=opts.budget_s,
                           feasible_fn=combination_fits(hw, reg, plan),
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))

@@ -11,7 +11,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,10 @@ class ComparisonRow(BaseModel):
     meets_slo: Optional[bool] = None
     calibration_seconds: float = 0.0
     calibration_trials: int = 0
+    # --repeats: the row stands for its median run; every run's scored tok/s is kept (None for a failed run).
+    repeats: int = 1
+    runs_tok_s: List[Optional[float]] = Field(default_factory=list)
+    tok_s_spread_pct: Optional[float] = None  # (max - min) / median over the runs that succeeded
 
 
 class ComparisonResult(BaseModel):
@@ -108,6 +112,35 @@ def _score_row(row: ComparisonRow, objective: str, cons: Constraints) -> None:
     row.scored_tpot_ms = m.tpot_ms
     row.scored_joules_per_token = m.joules_per_token
     row.meets_slo = ranked[0].feasible
+
+
+def combine_runs(rows: List[ComparisonRow]) -> ComparisonRow:
+    """One row from repeated measurements of it. The run with the median scored tok/s stands for the row,
+    so every metric shown comes from one real run rather than a blend; each run's tok/s is kept."""
+    if len(rows) == 1:
+        return rows[0]
+    ok = sorted((r for r in rows if r.ok and r.scored_tok_s is not None), key=lambda r: r.scored_tok_s)
+    row = (ok[(len(ok) - 1) // 2] if ok else rows[0]).model_copy(deep=True)
+    row.repeats = len(rows)
+    row.runs_tok_s = [r.scored_tok_s if r.ok else None for r in rows]
+    if len(ok) >= 2 and row.scored_tok_s:
+        row.tok_s_spread_pct = (ok[-1].scored_tok_s - ok[0].scored_tok_s) / row.scored_tok_s * 100
+    return row
+
+
+def noise_notes(result: "ComparisonResult") -> List[str]:
+    """Reference rows whose runs overlap PolyServe's: the difference between them is within run-to-run noise."""
+    ps = result.polyserve_row
+    mine = [v for v in (ps.runs_tok_s if ps else []) if v is not None]
+    if len(mine) < 2:
+        return []
+    out = []
+    for r in result.default_rows():
+        theirs = [v for v in r.runs_tok_s if v is not None]
+        if len(theirs) >= 2 and min(mine) <= max(theirs) and min(theirs) <= max(mine):
+            out.append(f"{r.label}: its runs ({min(theirs):.0f}-{max(theirs):.0f} tok/s) overlap PolyServe's "
+                       f"({min(mine):.0f}-{max(mine):.0f}), so the difference is within run-to-run noise")
+    return out
 
 
 def _run_disagg_row(profile: Profile, backends: Dict[str, BaseBackend], models: Dict[str, PreparedModel],
@@ -172,8 +205,12 @@ def compare(
     power: Optional[object] = None,
     disagg_runner: Optional[object] = None,
     replica_runner: Optional[object] = None,
+    repeats: int = 1,
 ) -> ComparisonResult:
-    """Measure PolyServe's winner and every reference config under the same workload."""
+    """Measure PolyServe's winner and every reference config under the same workload.
+
+    With repeats > 1 every row is measured that many times, round-robin (all rows once, then all again),
+    so drift over the session (temperature, a noisy neighbour) falls on every row alike."""
     workload = workload or get_workload(profile.workload)
     cons = constraints or Constraints(ttft_ceiling_ms=workload.ttft_ceiling_ms,
                                       tpot_ceiling_ms=workload.tpot_ceiling_ms)
@@ -236,23 +273,34 @@ def compare(
         return row
 
     # PolyServe's winner, re-measured now so it faces the same conditions as the references.
+    measurers: List[Tuple[str, Callable[[], ComparisonRow]]] = []
     if profile.disagg is not None:
-        ps = _run_disagg_row(profile, backends, models, hw, workload, log_dir, power, disagg_runner, objective, cons,
-                             progress)
+        measurers.append(("polyserve", lambda: _run_disagg_row(profile, backends, models, hw, workload, log_dir, power,
+                                                               disagg_runner, objective, cons, progress)))
     elif profile.replicas > 1:
-        ps = _run_replica_row(profile, backends, models, hw, workload, log_dir, replica_runner, objective, cons,
-                              progress)
+        measurers.append(("polyserve", lambda: _run_replica_row(profile, backends, models, hw, workload, log_dir,
+                                                                replica_runner, objective, cons, progress)))
         result.notes.append(f"PolyServe serves {profile.replicas} replicas on {profile.replicas} GPUs; the stock rows "
                             "use one GPU, so this row is not a like-for-like throughput comparison")
     else:
-        ps = run_row("polyserve", profile.config)
+        measurers.append(("polyserve", lambda: run_row("polyserve", profile.config)))
+    for label, cfg in refs.items():
+        if cfg.backend in models:
+            measurers.append((label, lambda label=label, cfg=cfg: run_row(label, cfg)))
+
+    runs: Dict[str, List[ComparisonRow]] = {label: [] for label, _ in measurers}
+    for _ in range(max(1, repeats)):
+        for label, measure in measurers:
+            runs[label].append(measure())
+    for label, _ in measurers:
+        result.rows.append(combine_runs(runs[label]))
+    ps = result.polyserve_row
     ps.calibration_seconds = profile.calibration_seconds
     ps.calibration_trials = profile.calibration_trials
-    result.rows.append(ps)
-    for label, cfg in refs.items():
-        if cfg.backend not in models:
-            continue
-        result.rows.append(run_row(label, cfg))
+    if repeats > 1:
+        result.notes.append(f"every row was measured {repeats} times, interleaved; tok/s is the median run's, and the "
+                            "spread is (max - min) / median")
+        result.notes += noise_notes(result)
 
     ps_ok = ps.ok and ps.meets_slo
     if not ps_ok:
@@ -288,8 +336,10 @@ def to_markdown(result: ComparisonResult) -> str:
         m = r.metrics
         calib = f"{r.calibration_seconds:.0f}s / {r.calibration_trials}" if r.label == "polyserve" else "-"
         mem = _f(m.peak_mem_mb / 1024, 1) if m.peak_mem_mb else "-"
+        spread = (f" (median of {r.repeats}, spread {r.tok_s_spread_pct:.1f}%)"
+                  if r.repeats > 1 and r.tok_s_spread_pct is not None else "")
         lines.append(
-            f"| {name} | {_f(r.scored_tok_s)} @c{r.scored_concurrency} | {_f(r.scored_ttft_ms)} | "
+            f"| {name} | {_f(r.scored_tok_s)} @c{r.scored_concurrency}{spread} | {_f(r.scored_ttft_ms)} | "
             f"{_f(r.scored_ttft_p95_ms)} | {_f(r.scored_tpot_ms, 1)} | {mem} GB | {_f(m.power_w)} | "
             f"{_f(r.scored_joules_per_token, 3)} | {'yes' if r.meets_slo else 'no'} | {calib} |"
         )

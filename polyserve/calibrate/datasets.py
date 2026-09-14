@@ -60,12 +60,54 @@ LOADERS: Dict[str, Callable[[], List[Tuple[str, str]]]] = {
 }
 
 
+FILE_PREFIX = "file:"  # a source naming your own prompt file: "file:/path/to/prompts.jsonl"
+
+
+def read_prompt_file(path) -> List[str]:
+    """Your own prompts, from a JSONL file with one per line: a JSON string, {"prompt": ...}, {"text": ...}
+    or {"messages": [{"role": ..., "content": ...}, ...]}. A conversation's messages are joined in order with
+    blank lines; no chat template is applied, as with the built-in sources, which send raw text too."""
+    out: List[str] = []
+    with open(path, encoding="utf-8") as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{n}: not valid JSON ({exc.msg})") from None
+            text = _prompt_text(item)
+            if not text:
+                raise ValueError(f'{path}:{n}: expected a string, or an object with "prompt", "text" or "messages"')
+            out.append(text)
+    if not out:
+        raise ValueError(f"{path}: no prompts")
+    return out
+
+
+def _prompt_text(item: object) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        for key in ("prompt", "text"):
+            if isinstance(item.get(key), str):
+                return item[key].strip()
+        messages = item.get("messages")
+        if isinstance(messages, list):
+            return "\n\n".join(str(m["content"]).strip() for m in messages
+                               if isinstance(m, dict) and m.get("content")).strip()
+    return ""
+
+
 @functools.lru_cache(maxsize=None)
 def pool(source: str) -> Tuple[Tuple[str, str], ...]:
     """Every usable prompt of a source, in one fixed shuffled order."""
-    if source not in LOADERS:
-        raise ValueError(f"unknown prompt source {source!r}; choose from {', '.join(LOADERS)}")
-    items = list(LOADERS[source]())
+    if source.startswith(FILE_PREFIX):
+        items = [(p, "") for p in read_prompt_file(source[len(FILE_PREFIX):])]
+    elif source not in LOADERS:
+        raise ValueError(f"unknown prompt source {source!r}; choose from {', '.join(LOADERS)} or file:<path>")
+    else:
+        items = list(LOADERS[source]())
     if not items:
         raise RuntimeError(f"prompt source {source!r} returned nothing")
     random.Random(0).shuffle(items)

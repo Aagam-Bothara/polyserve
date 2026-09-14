@@ -283,6 +283,11 @@ class StagedSearch:
     # prompts llama.cpp reached 470 tok/s against vLLM's 1677 and its other three GGUF quants still took
     # 25 minutes to lose.
     drop_backend_below: float = 0.5
+    # --budget: stop starting trials once the typical trial would end past this many seconds from the
+    # start; the best trial so far wins. Stages run most valuable first, so a budget cuts the least
+    # valuable trials. The clock is injectable so tests need not wait.
+    budget_s: Optional[float] = None
+    clock: Callable[[], float] = time.monotonic
     # Stage 4: power settings to try on the leading config (the default setting first). Empty = off.
     power_points: List[PowerSetting] = field(default_factory=list)
     # Stage 3b: configs differing from the leader only in the prefill knob. None = stage off.
@@ -302,6 +307,9 @@ class StagedSearch:
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
     _done: Dict[str, TrialResult] = field(default_factory=dict)
+    _started: Optional[float] = None
+    _trial_seconds: List[float] = field(default_factory=list)
+    _skipped: List[str] = field(default_factory=list)
 
     # ---- predictor helpers
 
@@ -328,14 +336,59 @@ class StagedSearch:
 
     # ---- helpers
 
+    # A reservation engine (vLLM, SGLang) that runs out of memory at start-up is retried with this much
+    # less of the GPU reserved, down to MIN_RETRY_GMU. Its KV pool fills its reservation, so what ran out
+    # is the memory outside it: on an A40, vLLM 0.11 failed twice at batch 512 with the fp8 cache at 0.95,
+    # while vLLM 0.29 started that same shape every time, so no fixed buffer size fits every version.
+    RETRY_GMU_STEP = 0.05
+    MIN_RETRY_GMU = 0.85
+
+    def _headroom_retry(self, cfg: Config, res: TrialResult) -> Optional[Config]:
+        """The same config with less GPU memory reserved, after an out-of-memory start-up failure."""
+        gmu = cfg.gpu_memory_utilization
+        if res.launched or not (res.error or "").startswith("out of memory at start-up") or gmu is None:
+            return None
+        lower = round(gmu - self.RETRY_GMU_STEP, 2)
+        if lower < self.MIN_RETRY_GMU - 1e-9:
+            return None
+        retry = cfg.model_copy(update={"gpu_memory_utilization": lower})
+        if retry.key() in self._done or (self.feasible_fn is not None and not self.feasible_fn(retry)):
+            return None
+        return retry
+
+    def _over_budget(self) -> bool:
+        """Whether a typical trial started now would end past the budget. The first always runs."""
+        if self.budget_s is None or not self._trial_seconds:
+            return False
+        if self._started is None:
+            self._started = self.clock()
+        typical = sum(self._trial_seconds) / len(self._trial_seconds)
+        return self.clock() + typical > self._started + self.budget_s
+
     def _run(self, cfg: Config, stage: str) -> TrialResult:
         key = cfg.key()
         if key in self._done:
             return self._done[key]
+        if self._over_budget():
+            self._skipped.append(f"{stage} {key}")
+            return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), launched=False,
+                               error="skipped: calibration budget reached")
         if self.progress:
             self.progress(stage, cfg, None)
+        t0 = self.clock()
+        if self._started is None:
+            self._started = t0
         res = self.runner.run(cfg, stage)
+        self._trial_seconds.append(self.clock() - t0)
         self._done[key] = res
+        retry = self._headroom_retry(cfg, res)
+        if retry is not None:
+            self.results.append(res)  # the failed launch stays on record for the memory report
+            if self.progress:
+                self.progress(stage, cfg, res)
+            self.notes.append(f"{key} ran out of memory at start-up; retried at gpu_memory_utilization "
+                              f"{retry.gpu_memory_utilization:.2f}")
+            return self._run(retry, stage)
         self.results.append(res)
         if self.progress:
             self.progress(stage, cfg, res)
@@ -666,4 +719,8 @@ class StagedSearch:
             pn = self._power_note(winner)
             if pn:
                 notes.append(pn)
+        if self._skipped:
+            shown = "; ".join(self._skipped[:5]) + (f"; and {len(self._skipped) - 5} more" if len(self._skipped) > 5 else "")
+            self.notes.append(f"calibration budget of {self.budget_s:.0f}s reached after {len(self.results)} trials; "
+                              f"skipped {len(self._skipped)}: {shown}")
         return winner, self.notes + notes

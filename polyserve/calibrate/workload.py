@@ -15,7 +15,8 @@ Presets (`polyserve serve <model> --workload NAME`):
 | code-edit        |  ≤768   | ≤512   | 1 / 4 / 8     |   500 ms     | add type hints to a function    |
 
 The last three use real text (polyserve.calibrate.datasets) and let answers stop when the model
-does; their prefill and decode figures are caps.
+does; their prefill and decode figures are caps. `--workload-file` builds the same kind of workload
+from your own prompts (workload_from_file), shaped like a preset.
 
 When a tokenizer is available, `fit_prompts` resizes each prompt to the target token count
 so "512-token prefill" means 512 tokens for that model, not ~512.
@@ -23,11 +24,18 @@ so "512-token prefill" means 512 tokens for that model, not ~512.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import random
+import re
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from polyserve.calibrate.datasets import CHARS_PER_TOKEN, FILE_PREFIX
 from polyserve.calibrate.tokens import TokenCounter
+
+logger = logging.getLogger(__name__)
 
 _WORDS = (
     "system latency throughput memory kernel batch token decode prefill schedule cache page block "
@@ -41,6 +49,7 @@ _PREFIX = "Prompt {i}: "
 _SUFFIX = "\n\nContinue the text:"
 CTX_HEADROOM = 64  # tokens of slack for chat templates / special tokens
 MIN_LEVEL_REQUESTS = 8  # fewest requests a level sends when requests_per_slot caps it
+MAX_FILE_PREFILL = 32768  # a longer prompt in a --workload-file is cut to this many tokens, keeping its start
 
 
 @dataclass
@@ -182,9 +191,13 @@ class Workload:
         counts = [counter.count(p) or 0 for p in self.prompts]
         return int(round(sum(counts) / len(counts)))
 
+    @property
+    def _source_label(self) -> str:
+        return Path(self.source[len(FILE_PREFIX):]).name if self.source.startswith(FILE_PREFIX) else self.source
+
     def describe(self) -> str:
         if self.source != "synthetic":
-            return (f"{self.name}: {self.n_prompts} {self.source} prompts of up to {self.prefill_tokens} tokens, "
+            return (f"{self.name}: {self.n_prompts} {self._source_label} prompts of up to {self.prefill_tokens} tokens, "
                     f"answers up to {self.decode_tokens} tokens{' (natural stop)' if self.natural_stop else ''}, "
                     f"concurrency {'/'.join(str(c) for c in self.concurrencies)}, "
                     f"TTFT ceiling {self.ttft_ceiling_ms:.0f} ms"
@@ -252,6 +265,40 @@ def get_workload(name: str = "default") -> Workload:
         raise ValueError(f"unknown workload {name!r}; choose from {', '.join(WORKLOAD_NAMES)}")
     base = _PRESETS[name]
     return replace(base, prompts=[], fitted=False)
+
+
+def workload_from_file(path, template: Optional[Workload] = None) -> Workload:
+    """Your own prompts as a workload, shaped like `template` (default `default`): its concurrency levels
+    and latency ceilings are kept, and the prompts come from the file (see datasets.read_prompt_file).
+
+    Answers stop when the model does, capped at 512 tokens or the template's decode length if longer.
+    The name carries a hash of the file, so a profile calibrated on one version of it is never served for
+    another. Each concurrency level gets prompts of its own: sending the same ones again would let the
+    engine's prefix cache make later levels look faster, so a small file sends fewer requests instead."""
+    from polyserve.calibrate import datasets
+
+    p = Path(path).expanduser().resolve()
+    prompts = datasets.read_prompt_file(p)
+    digest = hashlib.sha256(p.read_bytes()).hexdigest()[:8]
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", p.stem)[:40] or "prompts"
+    t = template or get_workload("default")
+    per_slot = t.requests_per_slot or 4
+    levels = len(t.concurrencies)
+    want = max(max(MIN_LEVEL_REQUESTS, c * per_slot) for c in t.concurrencies)
+    per_level = max(1, min(want, len(prompts) // levels))
+    if per_level < want:
+        logger.warning("%s has %d prompts: each of the %d concurrency levels gets %d of its own (it could use %d)%s",
+                       p.name, len(prompts), levels, per_level, want,
+                       f"; with fewer than {max(t.concurrencies)} a level cannot reach its concurrency"
+                       if per_level < max(t.concurrencies) else "")
+    if len(prompts) < levels:
+        logger.warning("%s has fewer prompts than concurrency levels, so levels repeat prompts and the prefix cache "
+                       "can make later levels look faster", p.name)
+    longest = max(len(x) for x in prompts) // CHARS_PER_TOKEN + 1
+    return replace(t, name=f"file-{stem}-{digest}", source=FILE_PREFIX + str(p), natural_stop=True,
+                   n_prompts=per_level, prefill_tokens=min(MAX_FILE_PREFILL, -(-longest // 256) * 256),
+                   decode_tokens=max(t.decode_tokens, 512), shared_prefix_tokens=0, prefix_text="", prefix_fixed=False,
+                   prompts=[], fitted=False, requests_per_slot=per_slot, sample_offset=0)
 
 
 def workload_table() -> List[Dict[str, object]]:
