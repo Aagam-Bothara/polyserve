@@ -12,7 +12,7 @@ from polyserve.backends.vllm import KNOWN_ARCHS, PAGED_KV_FRACTION
 from polyserve.hfconfig import dtype_bytes, load_arch
 from polyserve.memory import MemoryModel
 from polyserve.models import Config, GiB, HardwareDescriptor, ModelSpec, PreparedModel
-from polyserve.hardware import nvlink_between
+from polyserve.hardware import nvlink_between, sglang_python
 from polyserve.quantized import INT4_METHODS, hf_weight_options
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class SglangBackend(BaseBackend):
 
     def launch_spec(self, cfg: Config, model: PreparedModel, port: int) -> LaunchSpec:
         args = [
-            sys.executable, "-m", "sglang.launch_server",
+            sglang_python() or sys.executable, "-m", "sglang.launch_server",
             "--model-path", model.hf_paths.get(cfg.quant) or model.hf_path or model.spec.hf_id,
             "--served-model-name", model.spec.hf_id,
             "--host", "127.0.0.1",

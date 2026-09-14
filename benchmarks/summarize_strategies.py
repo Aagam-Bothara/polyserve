@@ -3,8 +3,8 @@
 
     cd benchmarks/strategies && python ../summarize_strategies.py \
         --results results results-llamacpp results-layout results-disagg results-real results-real/v2 \
-            results-real/v3 results-l4 results-cpu \
-        --ablation ablation ablation-llamacpp ablation-real ablation-real/flashinfer ablation-l4 \
+            results-real/v3 results-real/sglang results-l4 results-cpu results-dolly results-dolly/budget-10m \
+        --ablation ablation ablation-llamacpp ablation-real ablation-real/flashinfer ablation-l4 ablation-dolly \
         --quality quality-3b.json quality-7b.json --gguf-quality quality-gguf-3b.txt \
         --task-quality task-quality-3b.json task-quality-7b.json task-quality-7b-l4.json --out SUMMARY.md
 """

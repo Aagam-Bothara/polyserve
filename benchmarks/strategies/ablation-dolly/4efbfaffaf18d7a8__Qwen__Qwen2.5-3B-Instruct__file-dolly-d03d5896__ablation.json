@@ -1,0 +1,371 @@
+{
+  "hardware_hash": "4efbfaffaf18d7a8",
+  "gpu": "NVIDIA A40",
+  "model_id": "Qwen/Qwen2.5-3B-Instruct",
+  "workload": "file-dolly-d03d5896",
+  "objective": "balanced",
+  "workload_spec": {
+    "name": "file-dolly-d03d5896",
+    "n_prompts": 32,
+    "prefill_tokens": 1536,
+    "decode_tokens": 512,
+    "concurrencies": [
+      1,
+      4,
+      8
+    ],
+    "ttft_ceiling_ms": 500.0,
+    "tpot_ceiling_ms": 50.0,
+    "shared_prefix_tokens": 0,
+    "seed": 0,
+    "source": "file:/workspace/dolly.jsonl",
+    "natural_stop": true,
+    "requests_per_slot": 4
+  },
+  "rows": [
+    {
+      "label": "polyserve",
+      "strategy": "pick",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 16384,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 570.9104502836379,
+      "ttft_ms": 118.55721240863204,
+      "ttft_p95_ms": 145.100855268538,
+      "tpot_ms": 14.154133787293352,
+      "e2e_ms": 6173.430256604216,
+      "joules_per_token": 0.3530394993345481,
+      "peak_mem_mb": 45310.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 76.15025320248132,
+          "ttft_ms": 77.36283633857965,
+          "tpot_ms": 16.45946818950616,
+          "e2e_ms": 6206.457303405937
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 276.5281297865486,
+          "ttft_ms": 109.22653088346124,
+          "tpot_ms": 14.248837491013017,
+          "e2e_ms": 6281.644821521662
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 570.9104502836379,
+          "ttft_ms": 118.55721240863204,
+          "tpot_ms": 14.154133787293352,
+          "e2e_ms": 6173.430256604216
+        }
+      }
+    },
+    {
+      "label": "+awq",
+      "strategy": "weights",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "awq",
+        "ctx": 16384,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/awq/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 624.598741999455,
+      "ttft_ms": 99.68430362641811,
+      "ttft_p95_ms": 148.50737247616053,
+      "tpot_ms": 11.282181421305141,
+      "e2e_ms": 4630.185280619264,
+      "joules_per_token": 0.307268966838789,
+      "peak_mem_mb": 44594.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 82.82777063065294,
+          "ttft_ms": 111.24720750376582,
+          "tpot_ms": 15.446183656707534,
+          "e2e_ms": 4264.339838201004
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 318.92648829449274,
+          "ttft_ms": 98.06941263377666,
+          "tpot_ms": 11.091918484097075,
+          "e2e_ms": 4840.557809490532
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 624.598741999455,
+          "ttft_ms": 99.68430362641811,
+          "tpot_ms": 11.282181421305141,
+          "e2e_ms": 4630.185280619264
+        }
+      }
+    },
+    {
+      "label": "+gptq",
+      "strategy": "weights",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "gptq",
+        "ctx": 16384,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/gptq/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 711.6355663435927,
+      "ttft_ms": 97.91624406352639,
+      "ttft_p95_ms": 147.90698885917664,
+      "tpot_ms": 10.799136263977228,
+      "e2e_ms": 4699.023238534324,
+      "joules_per_token": 0.2753593251503601,
+      "peak_mem_mb": 44376.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 89.7573820540066,
+          "ttft_ms": 113.34253381937742,
+          "tpot_ms": 14.860475071612768,
+          "e2e_ms": 4694.083974644013
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 299.76023481021025,
+          "ttft_ms": 102.91319899260998,
+          "tpot_ms": 12.634724223243499,
+          "e2e_ms": 5392.9142972118725
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 711.6355663435927,
+          "ttft_ms": 97.91624406352639,
+          "tpot_ms": 10.799136263977228,
+          "e2e_ms": 4699.023238534324
+        }
+      }
+    },
+    {
+      "label": "-kv",
+      "strategy": "kv",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 16384,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 565.3080114452316,
+      "ttft_ms": 97.81245421618223,
+      "ttft_p95_ms": 128.0142068862915,
+      "tpot_ms": 10.54327484969126,
+      "e2e_ms": 2651.92078655389,
+      "joules_per_token": 0.3955435984457478,
+      "peak_mem_mb": 44118.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 101.43814554459773,
+          "ttft_ms": 69.51666111126542,
+          "tpot_ms": 8.85000231063549,
+          "e2e_ms": 1774.2483561974268
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 310.03928964319476,
+          "ttft_ms": 90.69171501323581,
+          "tpot_ms": 10.076064525983075,
+          "e2e_ms": 2617.264894903492
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 565.3080114452316,
+          "ttft_ms": 97.81245421618223,
+          "tpot_ms": 10.54327484969126,
+          "e2e_ms": 2651.92078655389
+        }
+      }
+    },
+    {
+      "label": "-kv (FlashInfer kept)",
+      "strategy": "kv",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 16384,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {
+          "attention_backend": "FLASHINFER"
+        },
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4/attention_backend=FLASHINFER",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 540.6880692946428,
+      "ttft_ms": 103.56499068439007,
+      "ttft_p95_ms": 125.29883068054914,
+      "tpot_ms": 11.547059117627239,
+      "e2e_ms": 3058.1687424072597,
+      "joules_per_token": 0.39539354877734545,
+      "peak_mem_mb": 43508.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 75.8613129570397,
+          "ttft_ms": 115.8873694948852,
+          "tpot_ms": 11.296453992515673,
+          "e2e_ms": 2503.6753321628858
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 253.2522763417512,
+          "ttft_ms": 110.52403785288334,
+          "tpot_ms": 12.248746609307616,
+          "e2e_ms": 3201.0359167138113
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 540.6880692946428,
+          "ttft_ms": 103.56499068439007,
+          "tpot_ms": 11.547059117627239,
+          "e2e_ms": 3058.1687424072597
+        }
+      }
+    },
+    {
+      "label": "-spec",
+      "strategy": "spec",
+      "note": "",
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 16384,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "config_key": "vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2",
+      "ok": true,
+      "concurrency": 8,
+      "tok_s": 509.1075045595116,
+      "ttft_ms": 62.92678928002715,
+      "ttft_p95_ms": 107.74663463234901,
+      "tpot_ms": 13.70003419008629,
+      "e2e_ms": 5220.561535779075,
+      "joules_per_token": 0.4915514339799582,
+      "peak_mem_mb": 44528.125,
+      "meets_slo": true,
+      "token_count_source": "usage",
+      "levels": {
+        "1": {
+          "ok": true,
+          "tok_s": 77.31936052251592,
+          "ttft_ms": 28.822932858020067,
+          "tpot_ms": 12.84403779736595,
+          "e2e_ms": 5065.291254150143
+        },
+        "4": {
+          "ok": true,
+          "tok_s": 245.58826889120186,
+          "ttft_ms": 49.567949026823044,
+          "tpot_ms": 13.458883351478956,
+          "e2e_ms": 5635.845720100057
+        },
+        "8": {
+          "ok": true,
+          "tok_s": 509.1075045595116,
+          "ttft_ms": 62.92678928002715,
+          "tpot_ms": 13.70003419008629,
+          "e2e_ms": 5220.561535779075
+        }
+      }
+    }
+  ]
+}

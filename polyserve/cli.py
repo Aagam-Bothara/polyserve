@@ -247,9 +247,9 @@ COMBINE_OPT = typer.Option("on", "--combine", callback=_on_off,
                                 "change undone, then combinations of the settings that came close on their "
                                 "own (up to 8 extra trials in all)")
 BUDGET_OPT = typer.Option(None, "--budget", callback=_duration,
-                          help="Stop calibrating after about this long (90s, 10m, 1h). Stages run most valuable "
-                               "first; later trials are skipped, the best so far wins, and the profile lists what "
-                               "was skipped.")
+                          help="Stop calibrating after about this long (90s, 10m, 1h). Stages run in a fixed order "
+                               "(precision, memory, batch, then variations and combinations); later trials are "
+                               "skipped, the best so far wins, and the profile lists what was skipped.")
 TTFT_OPT = typer.Option(None, "--ttft-ceiling", help="balanced: TTFT ceiling in ms (default: the workload's)")
 
 

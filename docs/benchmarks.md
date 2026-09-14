@@ -103,6 +103,31 @@ What each strategy was worth, flipped one at a time and measured back to back:
 
 **CPU only** (Qwen2.5-0.5B-Instruct, `default` workload, llama.cpp on the A40 pod's Xeon Gold 6342 with the GPU hidden). The container sees 96 CPUs but may use 7.65, and PolyServe first gave llama.cpp 48 threads: 27 tok/s and 24 s to first token. The CPU probe now honours the cgroup quota and the affinity mask; with 7 threads the same configuration ran at 114 tok/s and 1.7 s. That still broke the 500 ms TTFT ceiling, so the pick was one slot with n-gram speculation: 92.2 tok/s against 67.5 for stock `llama-server` (+36.5%), both at about 475 ms. The synthetic prompts repeat themselves, which flatters n-gram speculation, so treat that gain as an upper bound.
 
+## Your own prompts, SGLang, and a time budget
+
+One A40 on 13–14 September 2026: vLLM 0.29.0 and SGLang 0.5.19 (in its own environment, found through `SGLANG_PYTHON`), Qwen2.5-3B-Instruct, objective `balanced`. The prompts were 300 drawn from Dolly-15k (CC BY-SA 3.0), a dataset no preset uses, passed with `--workload-file` and shaped by the `chat` template (1, 4 and 8 concurrent users). They are not committed; `benchmarks/make_dolly_prompts.py` rebuilds the same file. Every row was measured 3 times, interleaved.
+
+**SGLang, first launch through PolyServe** (smoke test, one short trial each): bf16 230.7 tok/s, AWQ 444.4, GPTQ 443.6, fp8_e5m2 KV cache 224.4, radix cache off 218.3 (time to first token 90 against 63 ms, since the smoke prompts share a prefix). Every flag PolyServe passes was accepted.
+
+**PolyServe against stock settings on your own prompts:**
+
+| row | median tok/s | runs | spread | TTFT |
+|---|---|---|---|---|
+| **PolyServe:** vLLM bf16, fp8 KV cache, Qwen2.5-0.5B draft model, batch 64 | **547** | 566 / 536 / 547 | 5.6% | 120 ms |
+| stock vLLM 0.29 | 496 (PolyServe +10.3%) | 503 / 496 / 478 | 4.9% | 54 ms |
+| stock SGLang 0.5.19 | 473 (PolyServe +15.6%) | 473 / 475 / 473 | 0.3% | 54 ms |
+
+- The gain is outside run-to-run noise: PolyServe's slowest run beat both stock rows' fastest.
+- SGLang led the first trial (490 against 471 tok/s for vLLM, with lower time to first token and 10% less energy per token). vLLM took the lead with the fp8 cache (521), then a 0.5B draft model (581). Undoing the batch step-up with the draft model on measured 603, the best trial of the search, and became the pick: the combination stage's undo step at work on a fresh workload. n-gram speculation collapsed to 141 tok/s, as on this card before.
+- The pick scored 603 tok/s in calibration and 547 in the comparison: choosing the best of many noisy trials flatters it, which is why the comparison re-measures with repeats.
+- The draft model roughly doubled time to first token (120 against 54 ms), inside the `chat` preset's 500 ms ceiling.
+- Later stages vary only the current leader, so SGLang was never measured with the fp8 cache or a draft model once vLLM led. Whether it would have won with them is unknown.
+- Flipped one at a time (single runs, back to back): without the draft model 509 tok/s against the pick's 571, so the draft model is worth about 12%, nearly all of the gain over stock vLLM. Without the fp8 cache 565 (−1%, within noise once the draft model is on, though it was worth 4% before the draft model joined); with the unquantized cache but FlashInfer attention kept 541. With 4-bit weights, which `--quant auto` leaves out for quality, GPTQ reached 712 (+25%) and AWQ 625 (+9%).
+
+**SGLang alone on `sharegpt`** (`--backend sglang`, one run per row): PolyServe tuned SGLang to bf16 with the fp8_e5m2 KV cache at batch 64, 1952 tok/s against 1799 for stock SGLang (+8.5%, time to first token 364 against 318 ms). As on vLLM, the fp8 cache was the step that paid (1790 → 1948 tok/s in calibration); batch 16 left requests queueing (5.9 s to first token). SGLang's backend offers no speculative decoding yet, so none was tried. For scale only, since it came from another session: stock vLLM measured 1714 on the same workload and card.
+
+**The same with `--budget 10m`:** calibration stopped after 6 trials in 580 s (precision, memory and batch for each engine) and skipped 7, the stages where the full run found its gain. The pick was plain vLLM bf16 at batch 64: 504 tok/s (504 / 505 / 503) against stock vLLM's 506 (518 / 503 / 506), which the comparison flagged as within run-to-run noise, and 474 for stock SGLang.
+
 ## Memory planner accuracy
 
 Each trial compares the planner's memory estimate with actual allocations reported by NVML and the backend's startup log. Run `polyserve memory-report` to see the comparison, or add `--apply` to fit the planner's constants to your machine.
@@ -138,7 +163,7 @@ These are gaps, not claims. In rough order of how much they would change the con
 
 1. **Task quality beyond one benchmark.** On GSM8K, quantization cost Qwen2.5-3B 2–5 points and Qwen2.5-7B about one, within noise, and fp8 with activation quantization on Ada cost 7B nothing. Other tasks (code, long-context retrieval), other model families, llama.cpp's GGUF formats and Hopper are ungraded, so whether 4-bit checkpoints could return to `--quant auto` for larger models is still open.
 2. **A model where memory truly binds.** Qwen2.5-7B on a 24 GB L4 was bandwidth-bound, not memory-bound: its grouped-query KV cache is small, and the presets reach at most 32 concurrent requests. A larger model on the same card (a 14B in fp8, or a model without grouped-query attention), or long-context traffic at high concurrency, is where batch and cache sizing would decide the result.
-3. **Other accelerators.** A100, A30 and a pre-Turing card (GTX 1080) are untested, so the compute-capability branch in the selector has never run on real hardware. SGLang is implemented and has never been benchmarked at all.
+3. **Other accelerators.** A100, A30 and a pre-Turing card (GTX 1080) are untested, so the compute-capability branch in the selector has never run on real hardware. SGLang has run on one A40 only (0.5.19, see [Your own prompts, SGLang, and a time budget](#your-own-prompts-sglang-and-a-time-budget)), on one workload, and never with speculative decoding, which its backend does not offer yet.
 4. **Beating an expert, not just the defaults.** Where the pick won big, it chose what an informed user could also pass by hand: fp8 on the L4, a draft model and an fp8 cache on `extract`. Measured against someone who already knows those flags, the rest of the search moved throughput by a few percent. Its value is knowing which of them pay on this card and this traffic, and what they cost in quality. The search can also miss: on `extract` the ablation found a configuration 19% faster than the pick, and only then did the combination stage learn to undo adopted changes (a rerun found it). What else a staged search misses is known only as far as the ablations reach.
 5. **Energy tuning on real hardware.** `--power` has only run against a simulated NVML. It needs root on the host, so it has to be measured on a machine you control; `benchmarks/measure_power.sh` runs the whole measurement in one command and restores the GPU afterwards. Whether the energy-optimal point sits near 70% of full power for these workloads, and whether it differs between prefill-heavy `rag` and decode-heavy `generation`, is still a prediction.
 6. **Disaggregated prefill and decode at a scale where it could pay.** On two PCIe-linked A40s with a 3B model it ran end to end but lost to one engine (102 against 105 tok/s, time to first token 3.1 s against 1.3 s), and one of the two pairs tried failed a quarter of its requests with KV blocks the decode engine never pulled. Published gains come from larger models, NVLink or RDMA between the engines, and heavier prefill contention, none of which was available here.

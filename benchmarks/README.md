@@ -1,32 +1,35 @@
 # Benchmark matrix
 
-Every cell is one `polyserve compare` run: PolyServe's calibrated pick, each installed backend's stock defaults, and real Ollama, all measured on the same workload with the same driver within minutes of each other. Raw results live in [results/](results/) as JSON; `polyserve report` turns them into [RESULTS.md](RESULTS.md) and the throughput-vs-TTFT plot.
+> Current results, with methods and caveats, are in [docs/benchmarks.md](../docs/benchmarks.md); their raw files are in [strategies/](strategies/). This page describes the matrix runner (`run_matrix.py` and `polyserve report`). The RTX 3090 row was measured with an early harness that sent the same prompts at every concurrency level, which let prefix caching inflate throughput. Its numbers were withdrawn; its files stay in [results/](results/) only for the memory-planner figures, which caching does not affect.
+
+Every cell is one or more `polyserve compare` runs: PolyServe's calibrated pick against each installed backend's stock defaults (and real Ollama when installed), measured on the same workload with the same driver within minutes of each other.
 
 ## Matrix
 
 | GPU | Model | vLLM | SGLang | llama.cpp | Ollama | PolyServe |
 |---|---|---|---|---|---|---|
-| RTX 3090 24 GB | Qwen2.5-3B-Instruct | ✓ | not installed | ✓ | ✓ | ✓ |
-| A100 80 GB | Llama-3.2-3B-Instruct | | | | | |
-| A100 80 GB | Llama-3.1-8B-Instruct | | | | | |
-| RTX 3090 24 GB | Qwen2.5-7B-Instruct | | | | | |
+| A40 48 GB | Qwen2.5-3B-Instruct | ✓ | ✓ (one workload) | ✓ | | ✓ |
+| A40 48 GB | Qwen2.5-7B-Instruct | ✓ (`chat`) | | ✓ (`chat`) | | ✓ |
+| L4 24 GB | Qwen2.5-7B-Instruct | ✓ | | ✓ | | ✓ |
+| 2× A40, PCIe | Qwen2.5-3B-Instruct | ✓ (layouts, disaggregated) | | | | ✓ |
+| CPU container, 7.65 cores | Qwen2.5-0.5B-Instruct | n/a | n/a | ✓ | | ✓ |
+| RTX 3090 24 GB | Qwen2.5-3B-Instruct | withdrawn | not installed | withdrawn | withdrawn | withdrawn |
+| A100 80 GB | Llama-3.2-3B / Llama-3.1-8B | | | | | |
 | A30 | Llama-3.2-3B-Instruct | | | | | |
 | GTX 1080 8 GB | Qwen2.5-1.5B-Instruct | n/a (cc 6.1) | n/a | | | |
-| CPU only | Qwen2.5-1.5B-Instruct | n/a | n/a | | | |
 
-The RTX 3090 row is complete for all six workloads: stock vLLM, stock llama.cpp and real Ollama were each measured against PolyServe's pick on the same card within minutes of each other. SGLang was not installed on that machine, so it has never been benchmarked. Every other row is empty.
-
-Each row is run for every workload in `polyserve workloads` (`default`, `chat`, `long-context`, `generation`, `high-concurrency`, `rag`). A ✓ means the results file exists; `polyserve report` fills in the numbers.
+A ✓ means at least one comparison exists for that pair; which workloads each covers is listed in [docs/benchmarks.md](../docs/benchmarks.md).
 
 ## Running a machine
 
 ```bash
-pip install "polyserve[nvml]" "vllm==0.11.0" "transformers>=4.56,<5"   # + sglang, llama.cpp, ollama as available
-export LLAMA_SERVER=/path/to/llama-server
+pip install "polyserve[nvml]" "vllm==0.29.0"   # driver 580+; older drivers: "vllm==0.11.0" "transformers>=4.56,<5"
+export LLAMA_SERVER=/path/to/llama-server       # optional
+export SGLANG_PYTHON=/path/to/sglang-env/bin/python   # optional: SGLang in its own environment
 python benchmarks/run_matrix.py --models meta-llama/Llama-3.2-3B-Instruct meta-llama/Llama-3.1-8B-Instruct
 ```
 
-`run_matrix.py` runs `polyserve compare` for every (model, workload) pair that does not already have a results file, so it is safe to re-run after a crash. Pass `--workloads chat rag` to narrow it, `--ollama` to include Ollama rows (needs the `ollama` binary), `--objective latency` for a different objective.
+`run_matrix.py` runs `polyserve compare` for every (model, workload) pair that does not already have a results file, so it is safe to re-run after a crash. Pass `--workloads chat rag` to narrow it, `--ollama` to include Ollama rows (needs the `ollama` binary), `--objective latency` for a different objective. For claims under about 10%, run `polyserve compare --repeats 3` instead, which measures each row three times interleaved and flags differences within noise.
 
 Then, on any machine with the results directory:
 

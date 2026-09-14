@@ -1,5 +1,7 @@
 # PolyServe benchmark results
 
+> **Withdrawn (September 2026).** The throughput numbers on this page were measured with an early harness that sent the same prompts at every concurrency level, so the engine's prefix cache made later levels look faster (one configuration read 3638 tok/s with replayed prompts and 1814 with fresh ones). They are kept as a record only; do not cite them. Current results, measured with the fixed harness: [docs/benchmarks.md](../docs/benchmarks.md). The memory-planner table below is not affected by caching, but it is superseded by the A40 figures there.
+
 Across 6 machine/model/workload combinations, PolyServe improves throughput by a median of +51% (range +7% to +67%) over the best stock/default configuration that satisfies the requested latency SLO, winning 6 of 6.
 
 1 combination excluded from the headline because the baseline or PolyServe missed the SLO (shown below, marked).

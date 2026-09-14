@@ -351,6 +351,30 @@ def _llama_server_info(binary: str) -> Tuple[Optional[str], bool]:
     return version, has_cuda
 
 
+def sglang_python() -> Optional[str]:
+    """The Python that runs SGLang: $SGLANG_PYTHON when set, else this interpreter if sglang imports here.
+
+    SGLang and vLLM pin shared dependencies (torch, FlashInfer, transformers) differently from release
+    to release, so they are safest in separate environments; pointing $SGLANG_PYTHON at SGLang's lets
+    one calibration choose between them."""
+    env = os.environ.get("SGLANG_PYTHON")
+    if env:
+        return env if os.path.exists(env) else None
+    return sys.executable if importlib.util.find_spec("sglang") is not None else None
+
+
+def _sglang_version(python: str) -> Optional[str]:
+    if python == sys.executable:
+        return _pkg_version("sglang")
+    try:
+        out = subprocess.run([python, "-c", "import importlib.metadata as m; print(m.version('sglang'))"],
+                             capture_output=True, text=True, timeout=60)
+    except Exception as exc:
+        logger.debug("%s could not report an sglang version: %s", python, exc)
+        return None
+    return (out.stdout.strip() or None) if out.returncode == 0 else None
+
+
 def _torch_is_cuda_build() -> Optional[bool]:
     if importlib.util.find_spec("torch") is None:
         return None
@@ -394,13 +418,15 @@ def probe_backends(gpus: List[GPUInfo]) -> Dict[str, BackendAvailability]:
         ),
     )
 
-    sgl_ver = _pkg_version("sglang")
-    sgl_importable = importlib.util.find_spec("sglang") is not None
+    sgl_python = sglang_python()
+    sgl_ver = _sglang_version(sgl_python) if sgl_python else None
+    sgl_found = sgl_python is not None and (sgl_python == sys.executable or sgl_ver is not None)
     out["sglang"] = BackendAvailability(
         name="sglang",
-        available=bool(sgl_importable and has_nvidia),
+        available=bool(sgl_found and has_nvidia),
         version=sgl_ver,
-        reason=("sglang not importable" if not sgl_importable
+        reason=("sglang not found: install it here, or set $SGLANG_PYTHON to the python of an environment that has it"
+                if not sgl_found
                 else ("no usable NVIDIA GPU (check CUDA_VISIBLE_DEVICES)" if not has_nvidia else None)),
     )
 

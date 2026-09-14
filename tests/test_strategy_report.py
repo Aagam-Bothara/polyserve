@@ -38,11 +38,13 @@ def test_compare_table_labels_reruns_and_skips_other_json(tmp_path):
     rerun.mkdir(parents=True)
     f = rerun / "h__Qwen__Qwen2.5-3B-Instruct__extract__balanced.json"
     f.write_text(json.dumps({"model_id": "Qwen/Qwen2.5-3B-Instruct", "workload": "extract", "gpu": "NVIDIA A40",
-                             "rows": [_row("polyserve", "vllm/bf16/b256", 731.0), _row("vllm-default", "k", 439.0)]}))
+                             "rows": [_row("polyserve", "vllm/bf16/b256", 731.0), _row("vllm-default", "k", 439.0),
+                                      _row("sglang-default", "s", 474.0)]}))
     profile = rerun / "extract-run2.profile.json"
     profile.write_text(json.dumps({"calibration_table": []}))
     md = compare_table([f, profile])
     assert "| A40 | Qwen2.5-3B-Instruct | extract (v3) | `vllm/bf16/b256` | 731 |" in md and "439 (+67%)" in md
+    assert "stock SGLang (gain)" in md and md.rstrip().endswith("| 474 (+54%) |")
     assert md.count("\n| ") == 1  # one data row: the profile is skipped
 
 

@@ -197,8 +197,8 @@ def _gpu(d: Dict[str, object]) -> str:
 def compare_table(paths: Sequence[Path]) -> str:
     """PolyServe's pick against stock vLLM at bf16 and fp8, one row per (model, workload) results file."""
     lines = ["| GPU | model | workload | PolyServe pick | tok/s | TTFT p50 | stock vLLM bf16 (gain) "
-             "| stock vLLM fp8 (gain) | stock llama.cpp (gain) |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "| stock vLLM fp8 (gain) | stock llama.cpp (gain) | stock SGLang (gain) |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
     notes: List[str] = []
     for p in sorted(paths):
         d = json.loads(Path(p).read_text(encoding="utf-8"))
@@ -210,13 +210,14 @@ def compare_table(paths: Sequence[Path]) -> str:
         run = Path(p).parent  # a rerun kept in a folder inside a results folder (results-real/v3) is labelled
         workload = f"{d.get('workload')}" + (f" ({run.name})" if run.parent.name.startswith("results") else "")
         if ps is None or not ps.get("ok"):
-            lines.append(f"| {_gpu(d)} | {model} | {workload} | failed | | | | | |")
+            lines.append(f"| {_gpu(d)} | {model} | {workload} | failed | | | | | | |")
             continue
         ours = float(ps["scored_tok_s"] or 0.0)
         llama = rows.get("llamacpp-cuda-default") or rows.get("llamacpp-cpu-default")
         lines.append(f"| {_gpu(d)} | {model} | {workload} | `{ps['config_key']}` | {ours:.0f} | "
                      f"{_ms(ps.get('scored_ttft_ms'))} | {_ref_cell(rows.get('vllm-default'), ours)} | "
-                     f"{_ref_cell(rows.get('vllm-fp8-default'), ours)} | {_ref_cell(llama, ours)} |")
+                     f"{_ref_cell(rows.get('vllm-fp8-default'), ours)} | {_ref_cell(llama, ours)} | "
+                     f"{_ref_cell(rows.get('sglang-default'), ours)} |")
         notes += [f"{model} / {d.get('workload')}: {n}" for n in d.get("notes", [])
                   if any(w in n for w in ("layout", "replicas", "disaggregat", "one GPU"))]
     return "\n".join(lines + ([""] + [f"- {n}" for n in notes] if notes else []))
