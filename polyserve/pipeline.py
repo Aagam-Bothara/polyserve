@@ -70,6 +70,7 @@ class SearchOptions:
     combine: bool = True  # combinations of the strategies that were promising on their own
     budget_s: Optional[float] = None  # --budget: seconds of calibration, after which later trials are skipped
     ttft_percentile: int = 95  # --ttft-percentile: which time to first token the ceiling applies to
+    confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -89,6 +90,8 @@ class SearchOptions:
             out["prefill"] = "off"
         if not self.combine:
             out["combine"] = "off"
+        if not self.confirm:
+            out["confirm"] = "off"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
         if objective == "balanced" and self.ttft_percentile != 50:
@@ -328,7 +331,7 @@ def calibrate(
     search = StagedSearch(objective=objective, runner=runner, constraints=constraints, progress=progress,
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
-                          budget_s=opts.budget_s,
+                          budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
                           feasible_fn=combination_fits(hw, reg, plan),
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))

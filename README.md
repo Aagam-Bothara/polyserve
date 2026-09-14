@@ -73,7 +73,7 @@ flowchart LR
 
 1. **Probe** the GPU, VRAM, CPU cores (within a container's quota) and installed backends.
 2. **Plan**: estimate weights + KV cache + workspace for every candidate and drop what will not fit.
-3. **Calibrate** on your workload in stages: precision, memory, batch, prefill budget, KV-cache type, prefix caching, speculative decoding, then combinations, including the leader with each adopted change undone. A backend that falls far behind stops being measured; every engine within 10% of the leader after the batch stage goes through the later stages too, with its own settings.
+3. **Calibrate** on your workload in stages: precision, memory, batch, prefill budget, KV-cache type, prefix caching, speculative decoding, then combinations, including the leader with each adopted change undone. A backend that falls far behind stops being measured; every engine within 10% of the leader after the batch stage goes through the later stages too, with its own settings. Last, the best three are measured again and the pick is made on those fresh runs.
 4. **Cache** the chosen configuration with its full calibration table.
 5. **Serve** it as a supervised process behind a proxy on `:8000`; `/polyserve/profile` shows what runs and why.
 
@@ -88,7 +88,7 @@ Every step, workload and option is described in [docs/usage.md](docs/usage.md).
 | `--objective` | `balanced` | `throughput`, `latency`, `balanced` (throughput under a time-to-first-token ceiling), `efficiency` |
 | `--ttft-percentile` | `95` | `50` judges the ceiling on the median instead, which lets half the requests run past it |
 | `--quant` | `auto` | weight precisions to consider; 4-bit AWQ/GPTQ is opt-in with `auto,awq,gptq` |
-| `--kv-quant`, `--prefix-cache`, `--speculative`, `--combine` | `on` | `off` rules a search stage out |
+| `--kv-quant`, `--prefix-cache`, `--speculative`, `--combine`, `--confirm` | `on` | `off` rules a search stage out |
 | `--layout` | `single` | `replicas`, `tp` or `auto` across several GPUs |
 | `--budget` | none | stop calibrating after about this long (`10m`, `1h`); the profile lists what was skipped. With a budget the variations (KV-cache type, prefix caching, speculative decoding) run straight after the precision stage, because on Dolly prompts a 10-minute budget spent in the old order stopped before them and served at stock speed |
 

@@ -226,13 +226,13 @@ def _percentile(value: int) -> int:
 
 
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
-          budget: Optional[float] = None, ttft_percentile: int = 95):
+          budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on"):
     from polyserve.pipeline import SearchOptions
 
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
         kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
-        combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile,
+        combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
     )
 
 
@@ -253,6 +253,9 @@ COMBINE_OPT = typer.Option("on", "--combine", callback=_on_off,
                            help="After tuning one setting at a time, measure the leader with each adopted "
                                 "change undone, then combinations of the settings that came close on their "
                                 "own (up to 8 extra trials in all)")
+CONFIRM_OPT = typer.Option("on", "--confirm", callback=_on_off,
+                           help="Re-measure the best three configurations at the end and choose on those "
+                                "runs (on|off)")
 BUDGET_OPT = typer.Option(None, "--budget", callback=_duration,
                           help="Stop calibrating after about this long (90s, 10m, 1h). Stages run in a fixed order "
                                "(precision, memory, batch, then variations and combinations); later trials are "
@@ -388,6 +391,7 @@ def bench(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    confirm: str = CONFIRM_OPT,
     budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
@@ -402,7 +406,7 @@ def bench(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
@@ -446,6 +450,7 @@ def recalibrate(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    confirm: str = CONFIRM_OPT,
     budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
@@ -456,7 +461,7 @@ def recalibrate(
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm), layout=layout)
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
 
@@ -487,6 +492,7 @@ def compare(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    confirm: str = CONFIRM_OPT,
     budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
@@ -502,11 +508,11 @@ def compare(
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=_progress, hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm), layout=layout)
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
-                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile).quants)
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -697,6 +703,7 @@ def serve(
     prefix_cache: str = PREFIX_OPT,
     layout: str = LAYOUT_OPT,
     combine: str = COMBINE_OPT,
+    confirm: str = CONFIRM_OPT,
     budget: Optional[str] = BUDGET_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
@@ -713,7 +720,7 @@ def serve(
                               workload=wl, constraints=_constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile),
                               progress=_progress, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm), layout=layout)
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")

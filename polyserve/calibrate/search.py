@@ -310,6 +310,11 @@ class StagedSearch:
     # winner: on Dolly-15k prompts on an A40, SGLang led the first trial, fell behind once vLLM got
     # the fp8 cache and a draft model, and was never tried with either.
     contender_band: float = 0.10
+    # Stage 5: re-measure the leader and up to confirm_top - 1 others within confirm_band of it,
+    # confirm_rounds times each in turn, and choose on those runs alone (0 = off).
+    confirm_top: int = 0
+    confirm_band: float = 0.10
+    confirm_rounds: int = 1
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -698,6 +703,71 @@ class StagedSearch:
             self._run(v, name)
             self._variant_log.append((name, leader.config, v))
 
+    def _remeasure(self, cfg: Config) -> Optional[TrialResult]:
+        """A fresh trial of a config already measured, bypassing the cache; None once the budget is spent."""
+        if self._over_budget():
+            self._skipped.append(f"confirm {cfg.key()}")
+            return None
+        if self.progress:
+            self.progress("confirm", cfg, None)
+        t0 = self.clock()
+        res = self.runner.run(cfg, "confirm")
+        self._trial_seconds.append(self.clock() - t0)
+        self.results.append(res)
+        if self.progress:
+            self.progress("confirm", cfg, res)
+        return res
+
+    def stage_confirm(self) -> Optional[List[TrialResult]]:
+        """Stage 5: re-measure the best few configurations and choose among the fresh runs only.
+
+        The search keeps the best of many noisy trials, which flatters the leader: on Dolly-15k prompts
+        on an A40 the pick measured 603 tok/s in calibration and 547 when `compare` re-measured it (the
+        other four picks re-measured so far came within 1.4%). Judging a shortlist on new runs alone
+        takes that bias out of the choice and out of the number the profile reports. Each shortlisted
+        config is represented by its median run, the worse of the middle two for an even count. Returns
+        those runs, or None when nothing could be re-measured.
+        """
+        ranked = rank(self.results, self.objective, self.constraints)
+        feasible = [x for x in ranked if x.feasible]
+        if feasible:
+            best = min(x.score for x in feasible)
+            candidates = [x for x in feasible if x.score - best <= self.confirm_band * abs(best)]
+        else:
+            candidates = ranked[:1]
+        shortlist: List[Config] = []
+        for x in candidates:
+            if len(shortlist) >= self.confirm_top:
+                break
+            if all(c.key() != x.result.config.key() for c in shortlist):
+                shortlist.append(x.result.config)
+        runs: Dict[str, List[TrialResult]] = {c.key(): [] for c in shortlist}
+        for _ in range(max(1, self.confirm_rounds)):
+            for cfg in shortlist:
+                res = self._remeasure(cfg)
+                if res is None:
+                    break
+                runs[cfg.key()].append(res)
+        reps: List[TrialResult] = []
+        for cfg in shortlist:
+            order = rank(runs[cfg.key()], self.objective, self.constraints)  # the successful runs, best first
+            if order:
+                reps.append(order[len(order) // 2].result)
+            elif runs[cfg.key()]:
+                self.notes.append(f"{cfg.key()} failed when re-measured, so it was not chosen")
+        if not reps:
+            return None
+        winner, _ = pick(reps, self.objective, self.constraints)
+        note = (f"re-measured the best {len(shortlist)} configuration{'s' if len(shortlist) > 1 else ''} and "
+                f"chose on the fresh runs")
+        orig = self._done.get(winner.config.key()) if winner is not None else None
+        if winner is not None and orig is not None and orig.ok:
+            then = rank([orig], self.objective, self.constraints)[0].metrics.tok_s
+            now = rank([winner], self.objective, self.constraints)[0].metrics.tok_s
+            note += f": the pick measured {then:.0f} tok/s in the search and {now:.0f} re-measured"
+        self.notes.append(note)
+        return reps
+
     def stage_power(self, base: Config) -> None:
         """Measure the leading config under each power setting and let the objective choose."""
         settings = list(self.power_points)
@@ -714,10 +784,11 @@ class StagedSearch:
                 if not s.is_default:
                     self._run(with_power(base, s), "power")
 
-    def _power_note(self, winner: TrialResult) -> Optional[str]:
+    def _power_note(self, winner: TrialResult, pool: Optional[Sequence[TrialResult]] = None) -> Optional[str]:
         s = setting_of(winner.config)
         base_key = winner.config.base_key()
-        uncapped = [r for r in self.results if r.ok and r.config.base_key() == base_key and setting_of(r.config).is_default]
+        pool = self.results if pool is None else pool
+        uncapped = [r for r in pool if r.ok and r.config.base_key() == base_key and setting_of(r.config).is_default]
         tried = [r for r in self.results if r.config.base_key() == base_key and not setting_of(r.config).is_default]
         if not tried:
             return None
@@ -757,13 +828,19 @@ class StagedSearch:
         self.stage_batch(feasible, chosen)
         for base in self._contenders():
             self._tune(base)
+        pool = self.results
+        if self.confirm_top > 0:
+            pool = self.stage_confirm() or pool  # the choice is made on the fresh runs alone
         if self.power_points:
-            leader, _ = pick(self.results, self.objective, self.constraints)
+            leader, _ = pick(pool, self.objective, self.constraints)
             if leader is not None:
+                before = len(self.results)
                 self.stage_power(leader.config.model_copy(update={"power_limit_w": None, "sm_clock_mhz": None}))
-        winner, notes = pick(self.results, self.objective, self.constraints)
+                if pool is not self.results:
+                    pool = list(pool) + self.results[before:]
+        winner, notes = pick(pool, self.objective, self.constraints)
         if winner is not None and self.power_points:
-            pn = self._power_note(winner)
+            pn = self._power_note(winner, pool)
             if pn:
                 notes.append(pn)
         if self._skipped:
