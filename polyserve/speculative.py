@@ -24,14 +24,15 @@ import importlib.util
 import re
 from typing import Dict, Optional, Tuple
 
-# (target pattern, draft model). The draft must share the target's tokenizer.
+# (target pattern, draft model). The draft must share the target's tokenizer. Llama drafts come from the target's
+# own organisation, so unsloth's ungated copies of Meta's gated models draft with an ungated model too.
 DRAFTS = [
     (r"^Qwen/Qwen2\.5-(?:1\.5|3|7|14|32|72)B-Instruct$", "Qwen/Qwen2.5-0.5B-Instruct"),
     (r"^Qwen/Qwen2\.5-Coder-(?:1\.5|3|7|14|32)B-Instruct$", "Qwen/Qwen2.5-Coder-0.5B-Instruct"),
     (r"^Qwen/Qwen3-(?:1\.7|4|8|14|32)B$", "Qwen/Qwen3-0.6B"),
-    (r"^meta-llama/Llama-3\.2-3B-Instruct$", "meta-llama/Llama-3.2-1B-Instruct"),
-    (r"^meta-llama/(?:Meta-)?Llama-3\.1-(?:8|70)B-Instruct$", "meta-llama/Llama-3.2-1B-Instruct"),
-    (r"^meta-llama/Llama-3\.3-70B-Instruct$", "meta-llama/Llama-3.2-1B-Instruct"),
+    (r"^(meta-llama|unsloth)/Llama-3\.2-3B-Instruct$", r"\1/Llama-3.2-1B-Instruct"),
+    (r"^(meta-llama|unsloth)/(?:Meta-)?Llama-3\.1-(?:8|70)B-Instruct$", r"\1/Llama-3.2-1B-Instruct"),
+    (r"^(meta-llama|unsloth)/Llama-3\.3-70B-Instruct$", r"\1/Llama-3.2-1B-Instruct"),
 ]
 
 # vLLM 0.11's V1 engine rejects a separate draft model ("not supported yet"); n-gram works there.
@@ -52,8 +53,9 @@ LOOKUP = ("ngram", "ngram_gpu", "suffix")  # proposers that need no second model
 def draft_for(hf_id: str) -> Optional[str]:
     """A smaller model from the same family that can draft for `hf_id`, or None."""
     for pattern, draft in DRAFTS:
-        if re.match(pattern, hf_id):
-            return draft
+        m = re.match(pattern, hf_id)
+        if m:
+            return m.expand(draft)
     return None
 
 

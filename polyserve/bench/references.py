@@ -66,8 +66,8 @@ def reference_configs(hw: HardwareDescriptor, prepared: Dict[str, PreparedModel]
 # --------------------------------------------------------------------------- Ollama
 
 _OLLAMA_TAGS = [
-    (r"^meta-llama/Llama-3\.2-(\d+)B", r"llama3.2:\1b"),
-    (r"^meta-llama/Llama-3\.1-(\d+)B", r"llama3.1:\1b"),
+    (r"^(?:meta-llama|unsloth)/Llama-3\.2-(\d+)B", r"llama3.2:\1b"),
+    (r"^(?:meta-llama|unsloth)/(?:Meta-)?Llama-3\.1-(\d+)B", r"llama3.1:\1b"),
     (r"^meta-llama/Meta-Llama-3-(\d+)B", r"llama3:\1b"),
     (r"^Qwen/Qwen2\.5-(\d+(?:\.\d+)?)B", r"qwen2.5:\1b"),
     (r"^Qwen/Qwen3-(\d+(?:\.\d+)?)B", r"qwen3:\1b"),

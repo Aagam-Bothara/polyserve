@@ -115,8 +115,13 @@ def fetch_config(spec: ModelSpec, token: Optional[str] = None) -> Dict[str, Any]
     if local is not None:
         return local
     from huggingface_hub import hf_hub_download
+    from huggingface_hub.utils import GatedRepoError
 
-    path = hf_hub_download(spec.hf_id, "config.json", revision=spec.revision, token=token)
+    try:
+        path = hf_hub_download(spec.hf_id, "config.json", revision=spec.revision, token=token)
+    except GatedRepoError as exc:
+        raise RuntimeError(f"{spec.hf_id} is gated on the Hugging Face Hub: accept its licence there and set "
+                           "HF_TOKEN, or use an ungated copy (for Meta's Llama models, unsloth's)") from exc
     with open(path, "r", encoding="utf-8") as fh:
         return json.load(fh)
 

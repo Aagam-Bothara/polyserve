@@ -302,10 +302,31 @@ def test_prefix_stage_only_for_shared_prefix_workloads(hw_gtx1080, spec, monkeyp
 # =========================================================================== 4. speculative decoding
 
 
+def test_a_gated_model_says_how_to_get_in(monkeypatch):
+    import huggingface_hub
+    from huggingface_hub.utils import GatedRepoError
+
+    from polyserve import hfconfig
+
+    class Gated(GatedRepoError):
+        def __init__(self):
+            Exception.__init__(self, "401 Client Error")
+
+    def refuse(*args, **kwargs):
+        raise Gated()
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", refuse)
+    with pytest.raises(RuntimeError, match="HF_TOKEN.*unsloth"):
+        hfconfig.fetch_config(ModelSpec(hf_id="meta-llama/Llama-3.1-8B-Instruct"))
+
+
 def test_draft_models_share_the_family_tokenizer():
     assert S.draft_for("Qwen/Qwen2.5-7B-Instruct") == "Qwen/Qwen2.5-0.5B-Instruct"
     assert S.draft_for("meta-llama/Llama-3.2-3B-Instruct") == "meta-llama/Llama-3.2-1B-Instruct"
     assert S.draft_for("meta-llama/Llama-3.1-8B-Instruct") == "meta-llama/Llama-3.2-1B-Instruct"
+    # an ungated copy drafts with an ungated copy, so neither needs a Hub token
+    assert S.draft_for("unsloth/Meta-Llama-3.1-8B-Instruct") == "unsloth/Llama-3.2-1B-Instruct"
+    assert S.draft_for("someone/Llama-3.1-8B-Instruct") is None
     assert S.draft_for("Qwen/Qwen2.5-0.5B-Instruct") is None  # nothing smaller to draft with
     assert S.draft_for("mistralai/Mistral-7B-Instruct-v0.3") is None
     assert S.parse("ngram:4") == ("ngram", None, 4)

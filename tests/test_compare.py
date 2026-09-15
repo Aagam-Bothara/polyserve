@@ -16,6 +16,7 @@ from tests.test_objectives_and_search import FakeRunner
 def test_ollama_tag_heuristic():
     assert ollama_tag_for("meta-llama/Llama-3.2-3B-Instruct") == "llama3.2:3b"
     assert ollama_tag_for("meta-llama/Llama-3.1-8B-Instruct") == "llama3.1:8b"
+    assert ollama_tag_for("unsloth/Meta-Llama-3.1-8B-Instruct") == "llama3.1:8b"
     assert ollama_tag_for("Qwen/Qwen2.5-3B-Instruct") == "qwen2.5:3b"
     assert ollama_tag_for("Qwen/Qwen2.5-1.5B-Instruct") == "qwen2.5:1.5b"
     assert ollama_tag_for("someone/CustomModel") is None
