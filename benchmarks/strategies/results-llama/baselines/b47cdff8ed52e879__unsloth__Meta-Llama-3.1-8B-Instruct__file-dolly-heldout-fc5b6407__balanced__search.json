@@ -1,0 +1,19 @@
+{
+ "model": "unsloth/Meta-Llama-3.1-8B-Instruct",
+ "workload": "file-dolly-d03d5896",
+ "eval_workload": "file-dolly-heldout-fc5b6407",
+ "space": 984,
+ "budget_s": 1324.2731955110212,
+ "polyserve": "sglang/fp8/ctx16384/b16/gmu0.93",
+ "polyserve_trials": 16,
+ "searches": [
+  {
+   "seed": 0,
+   "trials": 12,
+   "seconds": 1313.3282979290234,
+   "untried": 972,
+   "pick": "vllm/fp8/ctx4096/b16/gmu0.95/pb16384/kvint8_per_token_head/sd=draft:unsloth/Llama-3.2-1B-Instruct:4"
+  }
+ ],
+ "rule_of_thumb": "vllm/fp8/ctx4096/b64/gmu0.90/kvfp8"
+}

@@ -139,6 +139,7 @@ A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *
 ## 8. Limitations
 
 - One GPU. Tensor parallel is a stage the search does not have yet.
+- One change at a time. The stages adopt a change only when it pays on its own, and the combination stage joins only changes that came close to the leader alone, so an interaction neither change shows alone is missed. Given the same time, random sampling of the same settings matched the staged search on an A40 and an A100 and found such an interaction on an RTX 4090 (a draft model with an int8 KV cache and a 16k prefill budget, 29% faster than the pick; [benchmarks](benchmarks.md#llama-31-8b-on-four-gpus)). Spending part of the budget on random combinations around the leader is the obvious next step.
 - The synthetic workload is a proxy. A deployment with 4k-token prompts or 2k-token outputs sits elsewhere on the throughput/latency curve. Live re-tuning under real traffic is on the roadmap.
 - `runtime_workspace` is a constant per backend, not a function of model size; large models with many CUDA graphs will exceed it, which the stage-2 "largest safe" walk absorbs at the cost of one failed launch.
 - Energy on CPU needs RAPL read permission; without it `efficiency` degrades to throughput ordering and says so.

@@ -19,6 +19,20 @@
 | L4 | Qwen2.5-7B-Instruct | sharegpt | `vllm/fp8/ctx8192/b64/gmu0.95/pb16384/kvfp8` | 738 | 985 ms | 410 (+80%) | 701 (+5%) | failed | - |
 | L4 | Qwen2.5-7B-Instruct | sharegpt (p95) | `vllm/fp8/ctx8192/b64/gmu0.95/pb8192` | 219 | 176 ms | 128 (+71%) | 212 (+3%) | - | - |
 | A40 | Qwen2.5-3B-Instruct | high-concurrency | `vllm/gptq/ctx8192/b256/gmu0.95 x2` | 3152 | 803 ms | 1715 (+84%) | 1346 (+134%) | - | - |
+| A100-SXM4-80GB | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (baselines) | `vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 1150 | 74 ms | 724 (+59%) | - | - | - |
+| A40 | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (baselines) | `vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 505 | 168 ms | 262 (+93%) | - | - | - |
+| GeForce RTX 4090 | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (baselines) | `sglang/fp8/ctx16384/b16/gmu0.93` | 763 | 53 ms | - | - | - | 448 (+70%) |
+| GeForce RTX 4090 | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (headtohead) | `vllm/fp8/ctx16384/b16/gmu0.95/sd=suffix:24` | 813 | 30 ms | - | - | - | - |
+| H100 NVL | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (heldout) | `vllm/fp8/ctx16384/b64/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 2164 | 44 ms | 1155 (+87%) | 1743 (+24%) | - | - |
+| A100-SXM4-80GB | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (heldout) | `vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 1153 | 74 ms | 724 (+59%) | - | - | 722 (+60%) |
+| A40 | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (heldout) | `vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 505 | 167 ms | 262 (+93%) | - | - | 257 (+97%) |
+| GeForce RTX 4090 | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (heldout) | `sglang/fp8/ctx16384/b16/gmu0.93` | 765 | 52 ms | failed | failed | - | 448 (+71%) |
+| GeForce RTX 4090 | Meta-Llama-3.1-8B-Instruct | file-dolly-heldout-fc5b6407 (heldout-fixed) | `vllm/fp8/ctx16384/b16/gmu0.95/sd=suffix:24` | 807 | 31 ms | - | - | - | 459 (+76%) |
+| H100 NVL | Meta-Llama-3.1-8B-Instruct | file-oasst-8106683e (oasst) | `vllm/fp8/ctx16384/b64/gmu0.95/pb8192/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 1902 | 48 ms | - | 1755 (+8%) | - | - |
+| A100-SXM4-80GB | Meta-Llama-3.1-8B-Instruct | file-oasst-8106683e (oasst) | `vllm/bf16/ctx16384/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 1054 | 74 ms | 717 (+47%) | - | - | 716 (+47%) |
+| A40 | Meta-Llama-3.1-8B-Instruct | file-oasst-8106683e (oasst) | `vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:unsloth/Llama-3.2-1B-Instruct:4` | 440 | 166 ms | 260 (+69%) | - | - | 264 (+67%) |
+| GeForce RTX 4090 | Meta-Llama-3.1-8B-Instruct | file-oasst-8106683e (oasst) | `sglang/fp8/ctx16384/b16/gmu0.93` | 775 | 51 ms | - | failed | - | 460 (+68%) |
+| A40 | Qwen2.5-3B-Instruct | file-dolly-heldout-fc5b6407 (qwen-heldout) | `vllm/bf16/ctx16384/b64/gmu0.95/pb8192/kvfp8_e5m2/sd=suffix:24` | 994 | 39 ms | 448 (+122%) | - | - | 472 (+110%) |
 | A40 | Qwen2.5-3B-Instruct | chat-system | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64` | 455 | 171 ms | - | - | 157 (+190%) | - |
 | A40 | Qwen2.5-3B-Instruct | code-edit | `vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 483 | 64 ms | 459 (+5%) | - | 187 (+158%) | - |
 | A40 | Qwen2.5-3B-Instruct | extract | `vllm/bf16/ctx8192/b512/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 628 | 177 ms | 439 (+43%) | - | 175 (+259%) | - |
