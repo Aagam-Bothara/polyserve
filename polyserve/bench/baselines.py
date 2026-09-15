@@ -23,32 +23,11 @@ from polyserve.models import Config, HardwareDescriptor, TrialResult
 
 def search_space(hw: HardwareDescriptor, plan: Any, reg: Dict[str, Any], workload: Workload,
                  options: Any = None) -> List[Config]:
-    """Every runnable configuration calibration could reach, each once: the planner's configurations, then each
-    stage's variants of everything so far (prefill budgets, quantized KV caches with the batch step they allow,
-    prefix-cache settings, speculative methods), so every combination of them is included."""
-    from polyserve.pipeline import SearchOptions, combination_fits, kv_variants_fn
+    """Every runnable configuration calibration could reach, each once (pipeline.search_space, which the
+    explore stage draws from too)."""
+    from polyserve.pipeline import search_space as space
 
-    opts = options or SearchOptions()
-    stages: List[Callable[[Config], List[Config]]] = []
-    if opts.phase_tuning:
-        stages.append(lambda c: reg[c.backend].prefill_variants(c))
-    if opts.kv_quant:
-        stages.append(kv_variants_fn(hw, reg, plan))
-    if opts.prefix_cache and workload.shared_prefix_tokens > 0:
-        stages.append(lambda c: reg[c.backend].prefix_variants(c))
-    if opts.speculative:
-        stages.append(lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend]))
-    configs = list(plan.all_feasible)
-    if not opts.prefix_cache:
-        configs = [c.model_copy(update={"prefix_cache": False}) for c in configs]
-    for stage in stages:
-        configs += [v for c in configs for v in stage(c)]
-    fits = combination_fits(hw, reg, plan)
-    out: Dict[str, Config] = {}
-    for c in configs:
-        if c.key() not in out and fits(c):
-            out[c.key()] = c
-    return list(out.values())
+    return space(hw, plan, reg, workload, options)
 
 
 def rule_of_thumb(hw: HardwareDescriptor, plan: Any, reg: Dict[str, Any]) -> Optional[Config]:

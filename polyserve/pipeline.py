@@ -73,6 +73,7 @@ class SearchOptions:
     ttft_percentile: int = 95  # --ttft-percentile: which time to first token the ceiling applies to
     confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
     all_levels: bool = False  # --all-levels: measure every concurrency level of every trial (no early stop)
+    explore: bool = True  # --explore: random configurations of the leading engine and precision after the stages
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -96,6 +97,8 @@ class SearchOptions:
             out["confirm"] = "off"
         if self.all_levels:
             out["levels"] = "all"
+        if not self.explore:
+            out["explore"] = "off"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
         if objective == "balanced" and self.ttft_percentile != 50:
@@ -180,6 +183,35 @@ def kv_variants_fn(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "P
         return out
 
     return fn
+
+
+def search_space(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, BaseBackend], workload: Workload,
+                 options: Optional[SearchOptions] = None) -> List[Config]:
+    """Every runnable configuration calibration could reach, each once: the planner's configurations, then each
+    stage's variants of everything so far (prefill budgets, quantized KV caches with the batch step they allow,
+    prefix-cache settings, speculative methods), so every combination of them is included. The explore stage
+    draws from it, and so does random search in benchmarks/search_baselines.py."""
+    opts = options or SearchOptions()
+    stages: List[Callable[[Config], List[Config]]] = []
+    if opts.phase_tuning:
+        stages.append(lambda c: reg[c.backend].prefill_variants(c))
+    if opts.kv_quant:
+        stages.append(kv_variants_fn(hw, reg, plan))
+    if opts.prefix_cache and workload.shared_prefix_tokens > 0:
+        stages.append(lambda c: reg[c.backend].prefix_variants(c))
+    if opts.speculative:
+        stages.append(lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend]))
+    configs = list(plan.all_feasible)
+    if not opts.prefix_cache:
+        configs = [c.model_copy(update={"prefix_cache": False}) for c in configs]
+    for stage in stages:
+        configs += [v for c in configs for v in stage(c)]
+    fits = combination_fits(hw, reg, plan)
+    out: Dict[str, Config] = {}
+    for c in configs:
+        if c.key() not in out and fits(c):
+            out[c.key()] = c
+    return list(out.values())
 
 
 def select(
@@ -346,6 +378,7 @@ def calibrate(
                           power_points=points, variant_stages=stages, combine=opts.combine,
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
                           feasible_fn=combination_fits(hw, reg, plan),
+                          explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))
     t0 = time.monotonic()
