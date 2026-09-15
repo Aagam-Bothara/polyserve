@@ -17,7 +17,7 @@ Every result, with methods, ablations, quality checks and limits: [docs/benchmar
 ## Quickstart
 
 ```bash
-pip install git+https://github.com/Aagam-Bothara/polyserve.git   # not on PyPI yet
+pip install polyserve
 pip install "vllm==0.29.0"     # driver 580+; older drivers: "vllm==0.11.0" "transformers>=4.56,<5"
 polyserve serve Qwen/Qwen2.5-3B-Instruct --workload chat
 curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
