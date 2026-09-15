@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typer.testing import CliRunner
+import typer
 
 from polyserve.calibrate.objectives import Constraints
 from polyserve.cli import _opts, app
@@ -24,5 +24,8 @@ def test_a_full_level_profile_is_cached_apart():
 
 
 def test_every_calibrating_command_takes_the_flag():
+    # Read the registered options, not the rendered --help: on GitHub Actions typer forces rich's terminal
+    # output, whose colour codes split the flag's name in the text.
+    commands = typer.main.get_command(app).commands
     for command in ("bench", "recalibrate", "compare", "serve"):
-        assert "--all-levels" in CliRunner().invoke(app, [command, "--help"], terminal_width=200).output
+        assert any("--all-levels" in p.opts for p in commands[command].params), command
