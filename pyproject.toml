@@ -34,12 +34,18 @@ dependencies = [
 
 [project.optional-dependencies]
 nvml = ["nvidia-ml-py>=12.535.133"]
-# NOTE: the name "llmtrace" on PyPI is an unrelated observability package. This extra points at
-# the tracer PolyServe actually uses; install it from git so pip can never resolve a stranger's code.
-llmtrace = ["llmtrace @ git+https://github.com/Aagam-Bothara/llmtrace.git"]
+# llmtrace, the GPU tracer PolyServe prefers for telemetry (it falls back to pynvml, then psutil), is not an
+# extra: PyPI refuses packages with git dependencies, and "llmtrace" on PyPI is an unrelated project. Install
+# it from git: pip install "llmtrace @ git+https://github.com/Aagam-Bothara/llmtrace.git"
 # ruff is pinned: its default rules change between releases (0.16 added pyupgrade), so an unpinned
 # linter passed locally and failed in CI on the same code.
 dev = ["pytest>=7.0", "pytest-asyncio>=0.23", "ruff==0.15.0"]
+
+[project.urls]
+Homepage = "https://github.com/Aagam-Bothara/polyserve"
+Documentation = "https://github.com/Aagam-Bothara/polyserve/blob/main/docs/usage.md"
+Benchmarks = "https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md"
+Issues = "https://github.com/Aagam-Bothara/polyserve/issues"
 
 [project.scripts]
 polyserve = "polyserve.cli:app"

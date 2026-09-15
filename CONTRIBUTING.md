@@ -32,6 +32,17 @@ A number goes into [docs/benchmarks.md](docs/benchmarks.md) only if it was measu
 
 State the GPU, engine versions and date. Report failures, losses and ties as well as wins; a strategy that lost is a result.
 
+## Releasing
+
+Publishing a GitHub release uploads the package to PyPI through trusted publishing ([.github/workflows/release.yml](.github/workflows/release.yml)); no API token is stored anywhere. CI builds the package and runs `twine check --strict` on every push, so a release should not fail on packaging.
+
+One-time setup on pypi.org, under Account settings, Publishing: add a pending publisher with project name `polyserve`, owner `Aagam-Bothara`, repository `polyserve`, workflow `release.yml` and environment `pypi`. Then, for each release:
+
+1. Set `version` in `pyproject.toml` and push.
+2. Create a GitHub release with a tag `v<version>` (for example `v0.1.0`); the workflow builds, checks and publishes it.
+
+llmtrace, the GPU tracer PolyServe prefers for telemetry, is not a dependency on PyPI: the name `llmtrace` there belongs to an unrelated project, and PyPI refuses git dependencies. Without it PolyServe samples the GPU through `pynvml` (the `nvml` extra) or falls back to process-level `psutil` numbers.
+
 ## Style
 
 - `ruff`, line length 110.

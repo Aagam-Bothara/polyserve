@@ -12,7 +12,7 @@ Measured on rented GPUs against stock `vllm serve` and SGLang defaults:
 - **Your traffic decides what pays.** On one A40 with Qwen2.5-3B the pick changed with the prompts: suffix decoding on Dolly prompts (**+122%** on held-out prompts), a draft model on news-article extraction (+66.5%), an fp8 KV cache on real chat (+10%).
 - **Calibration pays for itself within hours.** It took 22–56 minutes per model and workload, repaid by 0.5–2.6 hours of busy serving on held-out prompts. Measuring the busiest load first skips 29–45% of that time without changing a pick.
 
-Every result, with methods, ablations, quality checks and limits: [docs/benchmarks.md](docs/benchmarks.md).
+Every result, with methods, ablations, quality checks and limits: [docs/benchmarks.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md).
 
 ## Quickstart
 
@@ -36,14 +36,14 @@ docker run --gpus all --ipc=host -p 8000:8000 -v ~/.cache/huggingface:/root/.cac
 
 ### Supported hardware
 
-Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vLLM, SGLang and llama.cpp (measured on an A40, A100, H100 NVL, L4 and RTX 4090); older NVIDIA GPUs and x86 CPUs run llama.cpp. vLLM-CPU and pre-Turing GPUs have never been benchmarked ([details](docs/benchmarks.md#hardware-and-engines-measured)).
+Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vLLM, SGLang and llama.cpp (measured on an A40, A100, H100 NVL, L4 and RTX 4090); older NVIDIA GPUs and x86 CPUs run llama.cpp. vLLM-CPU and pre-Turing GPUs have never been benchmarked ([details](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md#hardware-and-engines-measured)).
 
 ## Learn more
 
-- [docs/benchmarks.md](docs/benchmarks.md): every result, at a glance and in full, with methods, ablations, quality, limits and what is still unmeasured.
-- [docs/usage.md](docs/usage.md): how calibration works, workloads, objectives, every search option and the CLI.
-- [docs/writeup.md](docs/writeup.md): the design of the memory planner, calibration and the predictor, what the evidence does and does not support, and the roadmap.
-- [benchmarks/strategies/SUMMARY.md](benchmarks/strategies/SUMMARY.md): every table, regenerated from the raw JSON.
-- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and adding a backend.
+- [docs/benchmarks.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md): every result, at a glance and in full, with methods, ablations, quality, limits and what is still unmeasured.
+- [docs/usage.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/usage.md): how calibration works, workloads, objectives, every search option and the CLI.
+- [docs/writeup.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/writeup.md): the design of the memory planner, calibration and the predictor, what the evidence does and does not support, and the roadmap.
+- [benchmarks/strategies/SUMMARY.md](https://github.com/Aagam-Bothara/polyserve/blob/main/benchmarks/strategies/SUMMARY.md): every table, regenerated from the raw JSON.
+- [CONTRIBUTING.md](https://github.com/Aagam-Bothara/polyserve/blob/main/CONTRIBUTING.md): development setup, tests and adding a backend.
 
 MIT licensed.

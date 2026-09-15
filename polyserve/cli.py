@@ -19,7 +19,8 @@ from rich.table import Table
 from polyserve import __version__
 from polyserve.models import OBJECTIVES, GiB, ModelSpec, Profile, TrialResult
 
-app = typer.Typer(help="PolyServe: hardware-adaptive LLM serving. One command, one OpenAI-compatible API.",
+app = typer.Typer(help="PolyServe: an autotuner for LLM serving. It measures serving settings on your GPU and your "
+                       "traffic, then serves the fastest behind one OpenAI-compatible API.",
                   no_args_is_help=True, add_completion=False)
 console = Console()
 err = Console(stderr=True)
