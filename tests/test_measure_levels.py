@@ -60,6 +60,17 @@ def test_a_level_keeps_its_prompts_whatever_the_order(monkeypatch):
     assert dict(bottom_up) == dict(top_down)
 
 
+def test_the_warmup_fills_every_slot_of_the_busiest_level(monkeypatch):
+    seen = []
+    monkeypatch.setattr(M, "_drive", _timed_drive(seen, {1: 0.1, 4: 0.1, 8: 0.1}))
+    wl = Workload(n_prompts=3, prefill_tokens=16, decode_tokens=64, concurrencies=(1, 4, 8))
+    M.run_trial("http://x", LlmtraceHooks(), wl, warmup=True, counter=TokenCounter(),
+                enough=enough_level("throughput"))
+    (c, prompts), *measured = seen
+    assert (c, len(prompts)) == (8, 8)  # compiles what the first measured level would otherwise pay for
+    assert [c for c, _ in measured] == [8]
+
+
 def test_objectives_that_can_prefer_a_lower_level_measure_every_one():
     assert enough_level("latency") is None and enough_level("efficiency") is None
     fast = TrialMetrics(tok_s=900, ttft_ms=100, ttft_p95_ms=700, tpot_ms=20, requests=8, output_tokens=64, concurrency=8)

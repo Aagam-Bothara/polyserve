@@ -484,14 +484,20 @@ def run_trial(
         workload.fit_prompts(counter)
     prompt_tokens = workload.measured_prompt_tokens(counter) or 0
     if warmup:
+        # One short request per slot at the busiest level. Kernels that compile on first use (Triton attention,
+        # the sampler, speculative decoding) otherwise compile during the first batched level measured: on an
+        # A40 a draft model's first batched level had a p95 time to first token of 1.3-1.6 s and the level
+        # after it 0.12-0.18 s, and vLLM 0.29 logged "Triton kernel JIT compilation during inference". Once
+        # the busiest level ran first, that spike landed on the level that is scored.
+        top = max(workload.concurrencies)
         small = Workload(
-            n_prompts=min(2, workload.n_prompts), prefill_tokens=workload.prefill_tokens,
-            decode_tokens=min(16, workload.decode_tokens), concurrencies=(1,), seed=workload.seed + 1,
+            n_prompts=max(2, top), prefill_tokens=workload.prefill_tokens,
+            decode_tokens=min(16, workload.decode_tokens), concurrencies=(top,), seed=workload.seed + 1,
             # Same shared prefix as the real prompts, so the warmup leaves it cached as production would.
             shared_prefix_tokens=workload.shared_prefix_tokens, prefix_text=workload.prefix_text, prefix_fixed=True,
         )
         try:
-            asyncio.run(_drive(base_url, hooks, small, 1, request_timeout, counter))
+            asyncio.run(_drive(base_url, hooks, small, top, request_timeout, counter))
         except Exception as exc:
             logger.debug("warmup failed: %s", exc)
 
