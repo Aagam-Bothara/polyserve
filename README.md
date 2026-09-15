@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml/badge.svg)](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml)
 
-**PolyServe finds the fastest way to serve a model on your GPU for your traffic, then serves it.** Give it a model and, ideally, a sample of your prompts. It checks the hardware, drops every configuration that will not fit in memory, benchmarks the rest on your prompts across vLLM, SGLang and llama.cpp (weight precision, batch size, KV-cache type, speculative decoding and more), and serves the fastest one that meets your latency target behind an OpenAI-compatible API. The value is in measuring, not in a clever search: a common rule of thumb did no better than stock settings on two of the three cards it was tried on, and random sampling of the same settings, given the same time, matched PolyServe's search on two cards and beat it on the third. Calibration measures speed and latency; what quantization costs in answer quality is checked separately.
+**PolyServe is an autotuner for LLM serving: it finds the fastest configuration for your GPU and your traffic, then serves it.** Give it a model and, ideally, a sample of your prompts. It knows which settings each engine offers on each card (vLLM, SGLang and llama.cpp; weight precision, batch size, KV-cache type, speculative decoding and more), drops every configuration that will not fit in memory, measures the rest on your prompts, and serves the fastest one that meets your latency target behind an OpenAI-compatible API. What pays is what it tries and how it measures, not the order it tries things in. The winning settings changed from card to card and from one set of prompts to another, so PolyServe's pick beat a fixed rule of thumb (fp8 weights and KV cache, a short context, batch 256) by 15–97% on the three cards where both ran; but random sampling of the same settings, given the same time, did as well as PolyServe's staged order on two of those cards and better on the third. Calibration measures speed and latency; what quantization costs in answer quality is checked separately.
 
 ## Results
 
@@ -42,7 +42,7 @@ Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vL
 
 - [docs/benchmarks.md](docs/benchmarks.md): every result, at a glance and in full, with methods, ablations, quality, limits and what is still unmeasured.
 - [docs/usage.md](docs/usage.md): how calibration works, workloads, objectives, every search option and the CLI.
-- [docs/writeup.md](docs/writeup.md): the design of the memory planner, the staged search and the predictor, and the roadmap.
+- [docs/writeup.md](docs/writeup.md): the design of the memory planner, calibration and the predictor, what the evidence does and does not support, and the roadmap.
 - [benchmarks/strategies/SUMMARY.md](benchmarks/strategies/SUMMARY.md): every table, regenerated from the raw JSON.
 - [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and adding a backend.
 

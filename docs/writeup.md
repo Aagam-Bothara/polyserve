@@ -6,7 +6,7 @@
 
 Serving one model on one machine means choosing a backend (vLLM, SGLang, llama.cpp, …), a precision or quant, a memory budget, a context length and a batch/concurrency limit. The space is small enough to enumerate (~144 points for one model on one box) and large enough that nobody does; people copy defaults, and defaults are tuned for the wrong GPU. PolyServe turns this into a measured decision that runs once per (machine, model, objective) and is cached.
 
-The design has three parts that are reusable beyond this project: a **memory planner** that removes configurations that cannot run, a **staged search** that measures a dozen instead of a hundred, and a set of **constrained-argmax objectives** including an energy one, all measured by the same tracer (llmtrace).
+The design has three parts that are reusable beyond this project: a **memory planner** that removes configurations that cannot run, a **staged search** that measures a few dozen configurations instead of hundreds, and a set of **constrained-argmax objectives** including an energy one, all measured by the same tracer (llmtrace). Of the three, the search order is the one the evidence does not support: given the same time, random sampling of the same configurations did as well on two GPUs and better on a third (§3, §8). What carries the results is which configurations exist to be tried and how carefully each is measured.
 
 ## 2. Memory planner
 
@@ -44,7 +44,7 @@ A 3B model fits almost everywhere; the planner earns its keep as the model grows
 
 ## 3. Staged search
 
-A full grid would be 144 launches × ~30 s (engine startup dominates, not the 10 s workload) ≈ 70 minutes. The staged search runs 8–14 trials:
+A full grid would be 144 launches × ~30 s (engine startup dominates, not the 10 s workload) ≈ 70 minutes, and the variant stages below multiply it into the hundreds. The staged search runs 8–14 trials on the synthetic presets and 16–35 on the real-text calibrations since. Its order is a cost device, not a source of throughput: at the same budget, random sampling of the same space matched it on an A40 and an A100 and beat it by 29% on an RTX 4090 ([benchmarks](benchmarks.md#llama-31-8b-on-four-gpus)). What the stages buy is the same answer on every run, every strategy tried at least once, and a profile that says what each change was worth:
 
 1. **Quant / precision.** Group feasible configs by `(backend, quant)`. For each group run *one* baseline: median ctx, median batch, and the *largest* memory setting the planner accepted (full GPU offload, highest `gpu_memory_utilization`); if that launch fails, step down once or twice. Rank by the objective; keep the top two groups. This is where backends get eliminated: a backend whose best quant is not in the top two is never launched again. (An earlier draft used the median memory setting; on an RTX 3090 that ran llama.cpp with 27 of 36 layers on the GPU and measured 35 tok/s instead of 545. Quants must be compared at the memory setting they would actually be served at.)
 2. **Memory.** For each kept group, hold batch at the baseline and walk memory settings from largest to smallest — `gpu_memory_utilization` 0.95 → 0.90 → 0.80, or `n_gpu_layers` all → ¾ → ½, with ctx descending within each. Stop at the first config that launches *and* finishes the workload. That is "largest safe": the planner's estimate got it into the list, the measurement confirms it. At most three launches per group.

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "polyserve"
 version = "0.1.0"
-description = "Hardware-adaptive LLM serving runtime: picks and tunes the best inference backend for your machine"
+description = "Autotuner for LLM serving: measures vLLM, SGLang and llama.cpp settings on your GPU and your traffic, then serves the fastest"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {text = "MIT"}
