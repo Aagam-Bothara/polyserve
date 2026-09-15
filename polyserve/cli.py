@@ -247,7 +247,7 @@ def _percentile(value: int) -> int:
 
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
-          explore: str = "on"):
+          explore: str = "off"):
     from polyserve.pipeline import SearchOptions
 
     return SearchOptions(
@@ -279,10 +279,10 @@ COMBINE_OPT = typer.Option("on", "--combine", callback=_on_off,
 CONFIRM_OPT = typer.Option("on", "--confirm", callback=_on_off,
                            help="Re-measure the best three configurations at the end and choose on those "
                                 "runs (on|off)")
-EXPLORE_OPT = typer.Option("on", "--explore", callback=_on_off,
+EXPLORE_OPT = typer.Option("off", "--explore", callback=_on_off,
                            help="After the other stages, spend about 30% more trials on random configurations of "
-                                "the leading engine and precision, which finds settings that only pay together "
-                                "(on|off)")
+                                "the leading engine and precision, for settings that only pay together (on|off; off "
+                                "by default: on an RTX 4090 it did not close the gap to random search)")
 ALL_LEVELS_OPT = typer.Option(False, "--all-levels",
                               help="Measure every concurrency level of every trial instead of stopping at the busiest "
                                    "level that meets the objective; slower, for checking that shortcut")

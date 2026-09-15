@@ -329,7 +329,9 @@ class StagedSearch:
     # sampling of the same space found a draft model with an int8 KV cache and a 16k prefill budget, 29%
     # faster than the staged pick, whose stages had measured the draft model and the int8 cache one at a time.
     # After the stages, explore_share of the trials run so far (at least explore_min) goes to configurations
-    # drawn at random from explore_space that share the leader's engine and precision. Empty = off.
+    # drawn at random from explore_space that share the leader's engine and precision. Empty = off. Measured on
+    # that 4090 with equal time, its 9 draws found nothing better and random search still won by 28%, so the
+    # pipeline passes a space only under --explore on.
     explore_space: Sequence[Config] = field(default_factory=list)
     explore_share: float = 0.3
     explore_min: int = 4

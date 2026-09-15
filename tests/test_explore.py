@@ -62,14 +62,15 @@ def test_it_draws_only_the_leaders_engine_and_precision():
     assert explored and all(c.backend == "vllm" and c.quant == "bf16" for c in explored)
 
 
-def test_calibration_explores_by_default_and_the_option_turns_it_off(hw_a100, spec, no_network):
+def test_calibration_explores_only_when_asked(hw_a100, spec, no_network):
+    """Off by default: on an RTX 4090 its draws found nothing, and random search given the same time won by 28%."""
     candidates, reg = select(hw_a100, spec, force="vllm")
     plan = prepare_and_plan(hw_a100, spec, candidates, reg)
-    on = calibrate(hw_a100, spec, "throughput", plan, reg, runner=FakeRunner())
+    default = calibrate(hw_a100, spec, "throughput", plan, reg, runner=FakeRunner())
+    assert not any(t.stage == "explore" for t in default.calibration_table)
+    on = calibrate(hw_a100, spec, "throughput", plan, reg, runner=FakeRunner(), options=SearchOptions(explore=True))
     assert any(t.stage == "explore" for t in on.calibration_table)
-    off = calibrate(hw_a100, spec, "throughput", plan, reg, runner=FakeRunner(), options=SearchOptions(explore=False))
-    assert not any(t.stage == "explore" for t in off.calibration_table)
-    assert SearchOptions(explore=False).key()["explore"] == "off" and "explore" not in SearchOptions().key()
+    assert SearchOptions(explore=True).key()["explore"] == "on" and "explore" not in SearchOptions().key()
 
 
 def test_the_calibrating_commands_take_explore():

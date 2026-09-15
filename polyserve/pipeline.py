@@ -73,7 +73,7 @@ class SearchOptions:
     ttft_percentile: int = 95  # --ttft-percentile: which time to first token the ceiling applies to
     confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
     all_levels: bool = False  # --all-levels: measure every concurrency level of every trial (no early stop)
-    explore: bool = True  # --explore: random configurations of the leading engine and precision after the stages
+    explore: bool = False  # --explore: random draws around the leader after the stages (off: see search.py)
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -97,8 +97,8 @@ class SearchOptions:
             out["confirm"] = "off"
         if self.all_levels:
             out["levels"] = "all"
-        if not self.explore:
-            out["explore"] = "off"
+        if self.explore:
+            out["explore"] = "on"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
         if objective == "balanced" and self.ttft_percentile != 50:
