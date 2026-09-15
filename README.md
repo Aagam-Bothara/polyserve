@@ -101,7 +101,7 @@ The full CLI is in [docs/usage.md](docs/usage.md#cli).
 - The later search stages tune every engine within 10% of the leader after the batch stage; one further behind is never tried with the options that later helped the leader. At p95, whether a level meets the ceiling rests on the second-slowest of 32 requests at 8 users, so close calls can go either way; only two workloads have been calibrated that way, and the budget's new order has not been measured with the current warm-up.
 - Calibration never evaluates answer quality. The quality results above come from a separate script, run by hand, on one task (GSM8K) and one model family.
 - Measured on one model family (Qwen2.5) and three machines.
-- Calibration takes about half an hour per workload: 30–46 minutes in the latest runs, against 53–78 before trials measured their busiest level first. `--budget 10m` caps it further, at the price of skipped trials.
+- Calibration takes about half an hour per workload: 30–46 minutes in the latest runs, against 53–78 before trials measured their busiest level first. Where the pick beat the fastest stock setup by 20% or more, that time was repaid within 0.4–3.4 hours of busy serving, and at 5–10% within 4–13 hours; a tie never repays it ([break-even](docs/benchmarks.md#when-a-calibration-pays-for-itself)). `--budget 10m` caps it further, at the price of skipped trials.
 
 What is still unmeasured, in order of how much it could change the conclusions: [docs/benchmarks.md](docs/benchmarks.md#not-yet-measured).
 

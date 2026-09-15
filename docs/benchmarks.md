@@ -225,6 +225,30 @@ No score and no pick changed, at the 95th percentile or at the median; the skipp
 
 What the replay could not show: in the old order the busiest level ran last, after quieter levels had warmed the engine; run first, it pays for kernels that compile on first use. In the recorded quiet-to-busy calibrations that cost fell on the first batched level instead. On Dolly prompts every draft-model trial had a p95 time to first token of 1.3–1.6 s at 4 users and 0.12–0.18 s at 8 users right after. On an A40 on 14 September, with the busiest level first, the draft model, GPU n-gram lookup and the int8 cache on Triton attention showed 0.6–1.2 s at 8 users, and vLLM 0.29 logged "Triton kernel JIT compilation during inference". Two such requests out of 32 set a p95, so under the p95 ceiling that spike alone kept speculation out of the Dolly pick. The warm-up now sends one short request per slot at the busiest level before any level is measured, instead of two requests to one slot; on the Dolly re-run it removed the spike for vLLM: the draft model's p95 at 8 users fell from 1.2 s to 0.19–0.21 s, and GPU n-gram lookup qualified at 8 users too. It has not been checked on SGLang or llama.cpp.
 
+## When a calibration pays for itself
+
+Calibration occupies the GPU without serving. Against the fastest stock setup that met the limits in the same comparison, the pick's extra throughput repays that time after `calibration seconds × stock tok/s ÷ (PolyServe tok/s − stock tok/s)` of serving at the load the comparison scored. `benchmarks/break_even.py` computes it from the recorded comparisons. It prices throughput, for a server kept busy; at light traffic a pick's value is its latency instead, which this does not count.
+
+| comparison | calibration | PolyServe tok/s | fastest stock that met the limits | gain | break-even |
+|---|---|---|---|---|---|
+| A40, 7B, `chat` (4-bit allowed) | 26 min | 495 | stock vLLM 233 | +112% | 0.4 h |
+| A40, 3B, `chat` (4-bit allowed) | 21 min | 783 | stock vLLM fp8 575 | +36% | 1.0 h |
+| A40, 3B, `extract` | 46 min | 731 | stock vLLM 439 | +67% | 1.2 h |
+| A40, 3B, `generation` (4-bit allowed) | 63 min | 1157 | stock vLLM fp8 837 | +38% | 2.7 h |
+| A40, 3B, your own prompts at p95 | 46 min | 619 | stock vLLM 504 | +23% | 3.4 h |
+| A40, 3B, SGLang on `sharegpt` | 22 min | 1952 | stock SGLang 1799 | +9% | 4.3 h |
+| A40, 3B, `sharegpt` | 44 min | 1891 | stock vLLM 1714 | +10% | 7.1 h |
+| A40, 3B, `high-concurrency` (4-bit allowed) | 32 min | 1786 | stock vLLM 1686 | +6% | 9.1 h |
+| A40, 3B, `code-edit` | 39 min | 483 | stock vLLM 459 | +5%, single run | 13 h |
+| L4, 7B, `sharegpt` at p95 | 30 min | 219 | stock vLLM fp8 212 | tie | never |
+| A40, 3B, `rag` | 58 min | 106 | stock vLLM 105 | tie | never |
+| L4, 7B, `chat` | 45 min | 195 | stock vLLM fp8 195 | tie | never |
+| A40, 3B, your own prompts, `--budget 10m` (old warm-up) | 9 min | 499 | stock vLLM 509 | −2% | never |
+
+- Where the pick beat the fastest stock setup by 20% or more, the calibration paid for itself within 0.4–3.4 hours of busy serving; at 5–10% it took 4–13 hours; a tie never pays it back (the script's arithmetic gives 16 to 1,079 hours for these, which is noise divided by noise).
+- The rows marked "4-bit allowed" were picked when `--quant auto` still included 4-bit checkpoints (`--quant auto,awq,gptq` today), which cost the 3B model 4–5 GSM8K points.
+- A calibration that finds nothing still costs its half hour. `--budget` caps that cost, at the price of the trials it skips.
+
 ## Memory planner accuracy
 
 Each trial compares the planner's memory estimate with actual allocations reported by NVML and the backend's startup log. Run `polyserve memory-report` to see the comparison, or add `--apply` to fit the planner's constants to your machine.
