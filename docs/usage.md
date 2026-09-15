@@ -137,7 +137,7 @@ Disaggregation needs vLLM, two NVIDIA GPUs and the connector's package (`pip ins
 
 ### Search options
 
-The [benchmarks](benchmarks.md) show where the GPU gain comes from: fewer bytes per weight, since every decode step reads all of them. The first four options follow that lead, and the fifth adds GPUs. Each one adds a calibration stage on the current leader (and on any engine within 10% of it), and the objective decides whether the leader changes, so a strategy that loses on your machine is measured and dropped rather than assumed.
+The [benchmarks](benchmarks.md) show where the GPU gain comes from: fewer bytes per weight, since every decode step reads all of them. The first four options follow that lead, and the fifth adds GPUs. Each one adds a calibration stage on the current leader (and on any engine within 10% of it, or further behind when it offers a strategy the leader's engine lacks: on an RTX 4090 SGLang led in fp8, and only vLLM has speculative decoding), and the objective decides whether the leader changes, so a strategy that loses on your machine is measured and dropped rather than assumed.
 
 | Option | Default | What it adds |
 |---|---|---|

@@ -52,6 +52,9 @@ class TrialRunner(Protocol):
     def run(self, cfg: Config, stage: str) -> TrialResult: ...
 
 
+STAGE_NAMES = {"kv": "a quantized KV cache", "prefix": "prefix-cache settings", "spec": "speculative decoding"}
+
+
 def mentions_oom(log: str) -> bool:
     """Whether an engine log shows a CUDA out-of-memory failure."""
     text = log.lower()
@@ -662,25 +665,45 @@ class StagedSearch:
         leader, _ = pick(pool, self.objective, self.constraints)
         return leader
 
+    def _offers_more(self, cfg: Config, lead: Config) -> Optional[str]:
+        """The first variant stage with something to try on `cfg` and nothing on `lead`, if any."""
+        for name, fn in self.variant_stages:
+            try:
+                if fn(cfg) and not fn(lead):
+                    return name
+            except Exception:
+                continue
+        return None
+
     def _contenders(self, after: str = "the batch stage") -> List[Config]:
-        """The leader's config, then the best config of every other engine within contender_band of it."""
+        """The leader's config, then the best config of every other engine within contender_band of it, or
+        further behind when a variant stage has something for that engine and nothing for the leader's: on an
+        RTX 4090, SGLang in fp8 led vLLM by 14% with Llama 3.1 8B, and only vLLM has speculative decoding,
+        worth 57-93% with a draft model on the other cards."""
         ranked = rank(self.results, self.objective, self.constraints)
         if not ranked:
             return []
         lead = ranked[0]
-        out, seen = [lead.result.config], {lead.result.config.backend}
+        lb = lead.result.config.backend
+        out, seen = [lead.result.config], {lb}
         for x in ranked[1:]:
             backend = x.result.config.backend
             if backend in seen:
                 continue
             seen.add(backend)
-            if (self.contender_band > 0 and lead.feasible and x.feasible
-                    and x.score - lead.score <= self.contender_band * abs(lead.score)):
+            if self.contender_band <= 0 or not (lead.feasible and x.feasible):
+                continue
+            close = x.score - lead.score <= self.contender_band * abs(lead.score)
+            extra = None if close else self._offers_more(x.result.config, lead.result.config)
+            if close or extra:
                 out.append(x.result.config)
                 if backend not in self._noted_contenders:  # a budgeted run asks twice; say it once
                     self._noted_contenders.add(backend)
-                    self.notes.append(f"{backend} came within {self.contender_band:.0%} of the leading "
-                                      f"{lead.result.config.backend} after {after}, so it was tuned as well")
+                    self.notes.append(
+                        f"{backend} came within {self.contender_band:.0%} of the leading {lb} after {after}, so it "
+                        "was tuned as well" if close else
+                        f"{backend} was more than {self.contender_band:.0%} behind the leading {lb} after {after}, "
+                        f"but was tuned as well: it offers {STAGE_NAMES.get(extra, extra)}, which {lb} does not")
         return out
 
     def _tune(self, base: Config) -> None:

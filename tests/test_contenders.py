@@ -65,6 +65,20 @@ def test_an_engine_far_behind_is_not_tuned():
     assert [s for s, c in runner.ran if c.backend == "sglang"] == ["quant"]
 
 
+def test_an_engine_behind_is_tuned_when_it_offers_what_the_leader_cannot():
+    """RTX 4090, Llama 3.1 8B: SGLang in fp8 led vLLM in fp8 by 14%, and only vLLM has speculative decoding."""
+    runner = ScoredRunner(lambda c: {"vllm": 670.0, "sglang": 778.0}[c.backend] * (1.5 if c.spec_decode else 1.0))
+    search = StagedSearch(objective="throughput", runner=runner, variant_stages=[("kv", kv), ("spec", spec)])
+    winner, notes = search.run([VLLM, SGLANG])
+    assert winner.config.backend == "vllm" and winner.config.spec_decode == "ngram:4"
+    assert any("offers speculative decoding, which sglang does not" in n for n in notes)
+    # with the leader-only search it stays out, as before
+    runner = ScoredRunner(lambda c: {"vllm": 670.0, "sglang": 778.0}[c.backend] * (1.5 if c.spec_decode else 1.0))
+    StagedSearch(objective="throughput", runner=runner, contender_band=0,
+                 variant_stages=[("kv", kv), ("spec", spec)]).run([VLLM, SGLANG])
+    assert not any(c.spec_decode for _, c in runner.ran)
+
+
 def test_with_a_budget_the_variations_come_before_the_sweeps():
     clock = {"now": 0.0}
 
