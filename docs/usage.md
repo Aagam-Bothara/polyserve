@@ -74,6 +74,7 @@ polyserve serve Qwen/Qwen2.5-3B-Instruct --workload chat --workload-file prompts
 - The profile's name includes a hash of the file, so editing the file triggers a fresh calibration instead of reusing a profile tuned for the old prompts.
 - Every concurrency level gets prompts of its own, so no level measures a prefix cache an earlier level filled. A file with too few prompts for that sends fewer requests per level and says so; a few hundred prompts is plenty for the presets' levels.
 - `benchmarks/ablate_strategies.py --workload-file` breaks the resulting pick down by strategy, as for the presets.
+- `polyserve compare --workload-file A --eval-workload-file B` calibrates on A and measures every row on B, prompts the search never saw, so the comparison shows whether the pick holds on held-out traffic; the results record both. `benchmarks/make_dolly_prompts.py --offset 300` writes 300 more Dolly prompts that share none with the first 300, and `benchmarks/make_oasst_prompts.py` writes 300 conversation openers from OpenAssistant, a dataset nothing else here uses.
 
 This is new and so far exercised by tests only; it drives the same real-text harness as `sharegpt`, `extract` and `code-edit`, which has run on GPUs.
 
@@ -166,6 +167,7 @@ polyserve recalibrate <model>   # force a rerun and overwrite the cached profile
 polyserve profiles              # list cached profiles
 polyserve compare <model>       # PolyServe's pick vs stock defaults vs Ollama, one workload -> results JSON
                                 #   --repeats 3: every row measured 3x interleaved; median, spread, noise flags
+                                #   --eval-workload-file B: calibrate on --workload-file A, measure every row on B
 polyserve report                # aggregate results: median gain over the best SLO-meeting default + plot
 polyserve memory-report [--apply]  # planner prediction vs measured peak memory; --apply fits workspace + margin
 polyserve predict <model>       # predicted tok/s / TTFT for every feasible config, no launches

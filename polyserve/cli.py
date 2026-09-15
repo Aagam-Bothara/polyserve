@@ -500,6 +500,10 @@ def compare(
     objective: str = typer.Option("balanced", "--objective", callback=_objective),
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
+    eval_workload_file: Optional[Path] = typer.Option(
+        None, "--eval-workload-file",
+        help="Measure every row on these prompts instead (JSONL, as --workload-file). Calibration never sees them, "
+             "so the comparison shows whether the pick holds on held-out traffic"),
     backend: Optional[str] = typer.Option(None, "--backend", help="Restrict PolyServe's candidates to one backend"),
     ollama_model: Optional[str] = typer.Option(None, "--ollama-model", help="Ollama tag for the ollama row"),
     include: Optional[List[str]] = typer.Option(None, "--include", help="Only these reference rows"),
@@ -531,6 +535,8 @@ def compare(
     from polyserve.pipeline import prepare_and_plan, resolve_profile, select
 
     wl = _workload(workload, workload_file)
+    # Held-out prompts are read before calibrating, so a bad file fails in seconds rather than after the search.
+    eval_wl = _workload(workload, eval_workload_file) if eval_workload_file else wl
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
@@ -554,9 +560,9 @@ def compare(
 
     from polyserve import cache as profile_cache
 
-    result = _compare(hw, spec, profile, planned.prepared, reg, workload=wl, constraints=cons,
+    result = _compare(hw, spec, profile, planned.prepared, reg, workload=eval_wl, constraints=cons,
                       ollama_tag=ollama_model, include=include or None, progress=_row_progress,
-                      log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{wl.name}",
+                      log_dir=profile_cache.logs_dir() / spec.safe_id / f"compare-{eval_wl.name}",
                       power=_power_controller(profile), repeats=repeats)
     path = save(result, out)
     console.print(to_markdown(result))

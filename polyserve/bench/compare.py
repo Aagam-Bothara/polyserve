@@ -76,6 +76,8 @@ class ComparisonResult(BaseModel):
     rows: List[ComparisonRow] = Field(default_factory=list)
     created_at: float = Field(default_factory=time.time)
     notes: List[str] = Field(default_factory=list)
+    # The workload PolyServe's pick was calibrated on, when the rows were measured on another (held out).
+    calibrated_on: Optional[str] = None
 
     @property
     def polyserve_row(self) -> Optional[ComparisonRow]:
@@ -254,6 +256,11 @@ def compare(
         ttft_ceiling_ms=cons.ttft_ceiling_ms,
         tpot_ceiling_ms=cons.tpot_ceiling_ms,
     )
+
+    if profile.workload and profile.workload != workload.name:
+        result.calibrated_on = profile.workload
+        result.notes.append(f"PolyServe's pick was calibrated on `{profile.workload}`; every row here was measured on "
+                            f"`{workload.name}`, which calibration never saw")
 
     def run_row(label: str, cfg: Config) -> ComparisonRow:
         backend = backends[cfg.backend]
