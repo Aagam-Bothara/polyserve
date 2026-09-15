@@ -72,6 +72,7 @@ class SearchOptions:
     budget_s: Optional[float] = None  # --budget: seconds of calibration, after which later trials are skipped
     ttft_percentile: int = 95  # --ttft-percentile: which time to first token the ceiling applies to
     confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
+    all_levels: bool = False  # --all-levels: measure every concurrency level of every trial (no early stop)
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -93,6 +94,8 @@ class SearchOptions:
             out["combine"] = "off"
         if not self.confirm:
             out["confirm"] = "off"
+        if self.all_levels:
+            out["levels"] = "all"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
         if objective == "balanced" and self.ttft_percentile != 50:
@@ -109,6 +112,18 @@ def _usable(cached: Optional[Profile], opts: SearchOptions, force_backend: Optio
     profile calibrated when `auto` still picked 4-bit checkpoints must not outlive that default."""
     return (cached is not None and (force_backend is None or cached.backend == force_backend)
             and opts.allows(cached.config.quant))
+
+
+def level_rule(objective: str, constraints: Constraints, opts: SearchOptions,
+               power_points: Optional[list] = None) -> Optional[Callable]:
+    """How a calibration trial measures its concurrency levels: busiest first, stopping once one settles the
+    score (objectives.enough_level), or every level (None). Every level with --all-levels, which exists to
+    check that shortcut, and with a power stage, which compares energy per token over every level."""
+    if power_points or opts.all_levels:
+        return None
+    from polyserve.calibrate.objectives import enough_level
+
+    return enough_level(objective, constraints)
 
 
 def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: "PlanResult"):
@@ -314,8 +329,6 @@ def calibrate(
     elif power_mode != "off":
         controller, points, power_notes = setup_power(hw, power_mode, power_controller)
     if runner is None:
-        from polyserve.calibrate.objectives import enough_level
-
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},
             models=plan.prepared,
@@ -323,9 +336,7 @@ def calibrate(
             workload=workload,
             log_dir=log_dir or (profile_cache.logs_dir() / spec.safe_id),
             power=controller,
-            # Highest load first, stopping once a level settles the score. Not with a power stage: it
-            # compares energy per token, which is averaged over every level measured.
-            enough=None if points else enough_level(objective, constraints),
+            enough=level_rule(objective, constraints, opts, points),
         )
     from polyserve.predict import Predictor
 
