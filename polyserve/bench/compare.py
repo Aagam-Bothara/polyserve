@@ -208,8 +208,10 @@ def compare(
     disagg_runner: Optional[object] = None,
     replica_runner: Optional[object] = None,
     repeats: int = 1,
+    extra: Optional[Dict[str, Config]] = None,
 ) -> ComparisonResult:
-    """Measure PolyServe's winner and every reference config under the same workload.
+    """Measure PolyServe's winner and every reference config under the same workload. `extra` adds rows under
+    their own labels (other searches' picks, say), measured like every other row and never filtered by `include`.
 
     With repeats > 1 every row is measured that many times, round-robin (all rows once, then all again),
     so drift over the session (temperature, a noisy neighbour) falls on every row alike."""
@@ -239,6 +241,7 @@ def compare(
             logger.info("ollama binary not found; skipping the ollama-default row")
     if include:
         refs = {k: v for k, v in refs.items() if k in include}
+    refs.update(extra or {})
 
     if runner is None:
         runner = SubprocessTrialRunner(backends=backends, models=models, hw=hw, workload=workload,
