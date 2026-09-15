@@ -2,38 +2,17 @@
 
 [![tests](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml/badge.svg)](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml)
 
-**PolyServe measures which serving settings pay off on your GPU and your traffic, then serves the winner.** Give it a model: it probes the machine, benchmarks vLLM, SGLang and llama.cpp configurations on your workload, and serves the pick behind an OpenAI-compatible API. Calibration measures speed and latency only; what a quantization costs in answer quality is measured separately, with `benchmarks/task_quality.py`.
-
-The claim is deliberately narrow. Against stock settings it wins clearly. Against an expert who already passes the right flags it mostly ties, except where the best settings depend on what the traffic contains. That is where the search earns its keep. On a second model family, Llama 3.1 8B on four GPUs, the pick beat the fastest stock setup that started by 24–93% on prompts calibration never saw. Given the same time, random sampling of the same settings did as well on two cards and better on the third: what pays is measuring on your card and your traffic, not the order of the search.
+**PolyServe finds the fastest way to serve a model on your GPU for your traffic, then serves it.** Give it a model and, ideally, a sample of your prompts. It checks the hardware, drops every configuration that will not fit in memory, benchmarks the rest on your prompts across vLLM, SGLang and llama.cpp (weight precision, batch size, KV-cache type, speculative decoding and more), and serves the fastest one that meets your latency target behind an OpenAI-compatible API. The value is in measuring, not in a clever search: a common rule of thumb did no better than stock settings on two of the three cards it was tried on, and random sampling of the same settings, given the same time, matched PolyServe's search on two cards and beat it on the third. Calibration measures speed and latency; what quantization costs in answer quality is checked separately.
 
 ## Results
 
-Qwen2.5 and Llama 3.1 models on rented GPUs, objective `balanced`, PolyServe's default `--quant auto` (no 4-bit weights), vLLM 0.29 on the A40 and vLLM 0.11 on the L4. The latency ceiling is judged on the 95th-percentile time to first token, PolyServe's default. Your own prompts and the L4 on `sharegpt` were calibrated that way on 14–15 September, and every row there was measured 3 times, interleaved. The other rows are single runs judged by the median and **re-scored** from their recorded measurements with `benchmarks/rescore_ttft.py`, not re-measured; where that changed a number, the median's follows in brackets, and a calibration judged at p95 could choose differently. Full tables, per-strategy ablations and methods are in [docs/benchmarks.md](docs/benchmarks.md).
+Measured on rented GPUs against stock `vllm serve` and SGLang defaults:
 
-| Machine, model | Workload | PolyServe pick | vs stock `vllm serve` | vs stock with `--quantization fp8` |
-|---|---|---|---|---|
-| A40, Llama 3.1 8B | **prompts calibration never saw** (calibrated on 300 Dolly prompts, measured on 300 others) | vLLM bf16 + 1B draft model | **+93%**, and +97% over stock SGLang (505 against 262 and 257 tok/s); +67% on OpenAssistant prompts | fp8 weights fail on Ampere |
-| A100 80 GB, Llama 3.1 8B | the same | vLLM bf16 + 1B draft model | **+59%** (1153 against 724); +47% on OpenAssistant prompts | fp8 weights fail on Ampere |
-| H100 NVL, Llama 3.1 8B | the same | fp8 + 1B draft model, 8k prefill budget | +87% (2164 against 1155) | **+24%** (against 1743); +8% on OpenAssistant prompts |
-| RTX 4090 24 GB, Llama 3.1 8B | the same | SGLang fp8 | stock fails to start (its 131k context does not fit); +71% over stock SGLang (765 against 448) | fails to start |
-| A40, 3B | `extract` (copy facts out of news articles) | bf16 + 0.5B draft model | **+66.5%** | stock fp8 fails to start (vLLM 0.29 on Ampere) |
-| A40, 3B | `sharegpt` (real chat first turns) | bf16 + fp8 KV cache, batch 512 | +10.3% | fails to start |
-| A40, 3B | `code-edit` (add type hints to functions) | bf16 + fp8 KV cache | +5.2%† | fails to start |
-| A40, 3B | **your own prompts** (300 from Dolly-15k, `--workload-file`), vLLM and SGLang both candidates | vLLM bf16 + fp8 KV cache + 0.5B draft model, 16k prefill budget | **+22.8%**, and +30.3% over stock SGLang (619 against 504 and 475 tok/s, p95 157 ms); ranges do not overlap | fails to start |
-| A40, 3B | the same prompts, recalibrated with suffix decoding installed; measured on 300 others | vLLM bf16 + fp8 KV cache + suffix decoding, 8k prefill budget | **+122%**, and +110% over stock SGLang (994 against 448 and 472 tok/s) | fails to start |
-| L4 24 GB, 7B | `chat` | fp8 weights | stock misses the 50 ms/token target at any load | tie, 107 tok/s at 4 users (195 at 8) |
-| L4 24 GB, 7B | `sharegpt` | fp8 weights, 8k prefill budget | **+71%**, 219 against 128 tok/s at 8 users (by the median: +80%, 738 at 32) | tie, 219 against 212 |
-| CPU container (7.65 cores), 0.5B | `default` | llama.cpp, 1 slot + n-gram speculation | misses the 500 ms ceiling by 18 ms at p95, which stock `llama-server` meets (+36.5% by the median*) | |
+- **The pick holds on prompts it never saw.** Llama 3.1 8B, calibrated on 300 Dolly-15k prompts and measured on 300 others: **+93%** on an A40, **+59%** on an A100, **+71%** on an RTX 4090 over stock SGLang (stock vLLM does not start there), and **+24%** on an H100 over stock vLLM with fp8 weights.
+- **Your traffic decides what pays.** On one A40 with Qwen2.5-3B the pick changed with the prompts: suffix decoding on Dolly prompts (**+122%** on held-out prompts), a draft model on news-article extraction (+66.5%), an fp8 KV cache on real chat (+10%).
+- **Calibration pays for itself within hours.** It took 22–56 minutes per model and workload, repaid by 0.5–2.6 hours of busy serving on held-out prompts. Measuring the busiest load first skips 29–45% of that time without changing a pick.
 
-\* Synthetic prompts, which flatter n-gram speculation; treat it as an upper bound.
-
-† A single run, inside the run-to-run spread that repeated runs showed on real text (up to about 6%), so not yet a reliable gain; `compare --repeats 3` would settle it.
-
-- **The right precision depends on the card and the latency target.** On the L4, fp8 beat 4-bit because 4-bit's slower prefill broke the first-token target; on the A40, where vLLM 0.29 offers no fp8, 4-bit ran at twice bf16.
-- **Quality was measured, in a separate experiment.** `benchmarks/task_quality.py` graded all 1,319 GSM8K problems at each precision, paired against bf16: on Qwen2.5-3B fp8 cost 2.4 points and 4-bit 4–5 (all significant); on 7B none cost a measurable amount. That is why `--quant auto` leaves 4-bit out; `--quant auto,awq,gptq` puts it back (it doubled throughput on real text). PolyServe does not grade answers while it calibrates, so `--quant` is where you decide what it may trade. An 8-bit W8A8 checkpoint cost Qwen2.5-3B 1.3 points, not significant, and ran 38–48% faster than bf16 on an A40, where vLLM 0.29 has no fp8 weights; it is opt-in (`--quant auto,w8a8`) until a second model agrees.
-- **Judged by the tail, a card promises less.** By the median, 8 of 20 recorded picks sent more than 1 request in 20 past the time-to-first-token ceiling; at p95 they serve fewer users at once (the L4 on `sharegpt`: 738 tok/s at 32 users by the median, 219 at 8 calibrated at p95). Stock settings queue worse at the tail as often as not, so the lead over stock grew in some rows (on an A40 on `high-concurrency`, +6% became +20%) and vanished in others (stock fp8 on the L4). [The re-scored tables](docs/benchmarks.md#judged-at-the-95th-percentile).
-- **Some strategies only pay together, and some get in each other's way.** On `extract` the fp8 cache helped on its own but slowed the draft model. The search finds that by undoing each change it adopted.
-- **Speculative decoding depends on load, content and the proposer.** On `extract` on an A40, suffix decoding ran 2.6× plain bf16 at 8 users and 1.6× at 32, and vLLM's n-gram lookup, which collapsed from four users up on its CPU proposer, ran 1.7× bf16 at 8 users on the GPU proposer (single trials). On your own prompts the draft model was the pick at p95; with arctic-inference installed, a recalibration picked suffix decoding and measured +122% on prompts it never saw. PolyServe measures at your workload's concurrency.
+Every result, with methods, ablations, quality checks and limits: [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Quickstart
 
@@ -45,9 +24,9 @@ curl localhost:8000/v1/chat/completions -H 'content-type: application/json' \
   -d '{"model":"Qwen/Qwen2.5-3B-Instruct","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-The first launch calibrates, which took 22–56 minutes in the latest runs, and caches the result per machine, model, objective and workload. Later launches serve at once. To tune for your own traffic instead of a preset, pass a sample of it: `--workload-file prompts.jsonl`. `--skip-calibration` serves the first candidate with default settings. For llama.cpp, build `llama-server` with CUDA and put it on `PATH` or in `LLAMA_SERVER`. SGLang and vLLM pin their shared dependencies differently from release to release, so SGLang can live in a separate environment: set `SGLANG_PYTHON` to that environment's `python`, and calibration can still choose between it and vLLM. `pip install arctic-inference==0.1.1` adds vLLM's suffix decoding to the speculative methods tried.
+The first launch calibrates and caches the result per machine, model, objective and workload; later launches serve at once. To tune for your own traffic, pass a sample of it: `--workload-file prompts.jsonl`, one prompt per line. Optional: `pip install arctic-inference==0.1.1` adds suffix decoding; SGLang can live in its own environment (set `SGLANG_PYTHON` to its `python`); llama.cpp needs `llama-server` built with CUDA, on `PATH` or in `LLAMA_SERVER`.
 
-With Docker. The image builds on the official vLLM image; CI builds the same Dockerfile on a slim Python base to check its steps, but not the full vLLM image:
+With Docker (built on the official vLLM image):
 
 ```bash
 docker build -t polyserve .
@@ -55,82 +34,16 @@ docker run --gpus all --ipc=host -p 8000:8000 -v ~/.cache/huggingface:/root/.cac
   -v ~/.polyserve:/root/.polyserve polyserve serve Qwen/Qwen2.5-3B-Instruct
 ```
 
-## Supported hardware
+### Supported hardware
 
-| Hardware | Backends tried | Measured |
-|---|---|---|
-| NVIDIA, compute capability ≥ 7.5 | vLLM, SGLang, llama.cpp (CUDA) | vLLM 0.11 and 0.29 and llama.cpp on an A40 and an L4, two-GPU layouts on a pair of A40s; vLLM 0.29 and SGLang 0.5.19 (from its own environment via `SGLANG_PYTHON`) on an A40, an A100, an RTX 4090 and, vLLM only, an H100 NVL |
-| NVIDIA, compute capability < 7.5 | llama.cpp (CUDA) | **never benchmarked** |
-| x86 CPU | llama.cpp; vLLM-CPU with AVX-512 | llama.cpp in a CPU container; vLLM-CPU **never benchmarked** |
+Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vLLM, SGLang and llama.cpp (measured on an A40, A100, H100 NVL, L4 and RTX 4090); older NVIDIA GPUs and x86 CPUs run llama.cpp. vLLM-CPU and pre-Turing GPUs have never been benchmarked ([details](docs/benchmarks.md#hardware-and-engines-measured)).
 
-Linux, Python 3.10–3.13.
+## Learn more
 
-## How it works
-
-```mermaid
-flowchart LR
-    P[probe<br/>GPU / CPU / backends] --> PL[memory planner<br/>drops what cannot fit]
-    PL --> C[calibrate<br/>staged search on your workload]
-    PR[roofline predictor] -.prunes.-> C
-    C --> CA[(profile cache)]
-    CA --> SV[serve<br/>OpenAI-compatible proxy :8000]
-```
-
-1. **Probe** the GPU, VRAM, CPU cores (within a container's quota) and installed backends.
-2. **Plan**: estimate weights + KV cache + workspace for every candidate and drop what will not fit.
-3. **Calibrate** on your workload in stages: precision, memory, batch, prefill budget, KV-cache type, prefix caching, speculative decoding, then combinations, including the leader with each adopted change undone. A backend that falls far behind stops being measured; every engine within 10% of the leader after the batch stage goes through the later stages too, with its own settings. Last, the best three are measured again and the pick is made on those fresh runs.
-4. **Cache** the chosen configuration with its full calibration table.
-5. **Serve** it as a supervised process behind a proxy on `:8000`; `/polyserve/profile` shows what runs and why.
-
-Every step, workload and option is described in [docs/usage.md](docs/usage.md).
-
-## Main options
-
-| Option | Default | Choices |
-|---|---|---|
-| `--workload` | `default` | `chat`, `generation`, `rag`, `long-context`, `high-concurrency`, shared-prefix `chat-system` and `rag-shared`, real-text `sharegpt`, `extract` and `code-edit` |
-| `--workload-file` | none | your own prompts, one per line of a JSONL file; `--workload` then sets only the concurrency levels and latency ceilings |
-| `--objective` | `balanced` | `throughput`, `latency`, `balanced` (throughput under a time-to-first-token ceiling), `efficiency` |
-| `--ttft-percentile` | `95` | `50` judges the ceiling on the median instead, which lets half the requests run past it |
-| `--quant` | `auto` | weight precisions to consider; the Hub's 4-bit AWQ/GPTQ and 8-bit W8A8 checkpoints are opt-in (`auto,awq,gptq,w8a8`) |
-| `--kv-quant`, `--prefix-cache`, `--speculative`, `--combine`, `--confirm` | `on` | `off` rules a search stage out |
-| `--layout` | `single` | `replicas`, `tp` or `auto` across several GPUs |
-| `--budget` | none | stop calibrating after about this long (`10m`, `1h`); the profile lists what was skipped. With a budget the variations (KV-cache type, prefix caching, speculative decoding) run straight after the precision stage, since that is where the gains on real text were |
-
-The full CLI is in [docs/usage.md](docs/usage.md#cli).
-
-## Limits
-
-- Against someone who already picks the right precision and flags, the rest of the search is worth a few percent, except where content decides, as on `extract`.
-- Never run on real hardware: vLLM-CPU, pre-Turing GPUs, and `--power`, which has only run against a simulated NVML.
-- The search changes one setting at a time and combines only changes that paid on their own, so it misses interactions: on an RTX 4090, random search given the same time found a draft model with an int8 KV cache and a 16k prefill budget that ran 29% faster than the pick ([details](docs/benchmarks.md#llama-31-8b-on-four-gpus)). On an A40 and an A100 random search tied it. At 8 users a p95 rests on 32 requests, so its second-slowest can decide; a level too close to its ceiling to call is measured again with as many requests, which no Llama calibration needed. The budget's new order has not been measured with the current warm-up.
-- Calibration never evaluates answer quality. The quality results above come from a separate script, run by hand, on one task (GSM8K) and one model family.
-- Measured on two model families (Qwen2.5 and Llama 3.1 8B) and six kinds of machine, for speed; answer quality only on Qwen2.5.
-- Calibration takes half an hour to an hour per workload: 22–56 minutes for Llama 3.1 8B on four cards, 30–46 for Qwen2.5, against 53–78 before trials measured their busiest level first. Where the pick beat the fastest stock setup by 20% or more, that time was repaid within 0.4–3.4 hours of busy serving (0.5–2.6 for Llama on held-out prompts), and at 5–10% within 4–13 hours; a tie never repays it ([break-even](docs/benchmarks.md#when-a-calibration-pays-for-itself)). `--budget 10m` caps it further, at the price of skipped trials.
-
-What is still unmeasured, in order of how much it could change the conclusions: [docs/benchmarks.md](docs/benchmarks.md#not-yet-measured).
-
-## Documentation
-
-- [docs/usage.md](docs/usage.md): how calibration works, workloads, objectives, every search option, the CLI and the backend interface.
-- [docs/benchmarks.md](docs/benchmarks.md): every measured result, with methods, ablations, quality, and the planner's and predictor's accuracy.
-- [docs/writeup.md](docs/writeup.md): the design of the memory planner, the staged search and the predictor.
+- [docs/benchmarks.md](docs/benchmarks.md): every result, at a glance and in full, with methods, ablations, quality, limits and what is still unmeasured.
+- [docs/usage.md](docs/usage.md): how calibration works, workloads, objectives, every search option and the CLI.
+- [docs/writeup.md](docs/writeup.md): the design of the memory planner, the staged search and the predictor, and the roadmap.
 - [benchmarks/strategies/SUMMARY.md](benchmarks/strategies/SUMMARY.md): every table, regenerated from the raw JSON.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development setup, tests and adding a backend.
 
-## Non-goals and roadmap
-
-PolyServe sits above the inference engines (vLLM, SGLang and llama.cpp) and launches them; it is not a replacement, a compiler or a kernel library, and it supports only the hardware listed above. Planned: AMD ROCm and Apple Silicon backends, Windows, and re-tuning under live traffic instead of a one-time calibration.
-
-## Development
-
-```bash
-pip install -e ".[dev]"
-pytest                                  # no GPU or backend needed
-ruff check polyserve tests benchmarks
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-MIT
+MIT licensed.

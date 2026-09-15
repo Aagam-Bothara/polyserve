@@ -143,3 +143,7 @@ A profile is keyed by `(hardware_hash, model, objective)`. The hash covers the *
 - The synthetic workload is a proxy. A deployment with 4k-token prompts or 2k-token outputs sits elsewhere on the throughput/latency curve. Live re-tuning under real traffic is on the roadmap.
 - `runtime_workspace` is a constant per backend, not a function of model size; large models with many CUDA graphs will exceed it, which the stage-2 "largest safe" walk absorbs at the cost of one failed launch.
 - Energy on CPU needs RAPL read permission; without it `efficiency` degrades to throughput ordering and says so.
+
+## 9. Non-goals and roadmap
+
+PolyServe sits above the inference engines (vLLM, SGLang and llama.cpp) and launches them; it is not a replacement, a compiler or a kernel library, and it supports only the hardware [measured so far](benchmarks.md#hardware-and-engines-measured). Planned: AMD ROCm and Apple Silicon backends, Windows, and re-tuning under live traffic instead of a one-time calibration.
