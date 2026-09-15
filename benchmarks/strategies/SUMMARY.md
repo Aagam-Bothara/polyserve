@@ -12,8 +12,12 @@
 | A40 | Qwen2.5-3B-Instruct | rag | `vllm/bf16/ctx32768/b64/gmu0.95` | 106 | 1288 ms | 105 (+1%) | 45 (+134%) | - | - |
 | A40 | Qwen2.5-3B-Instruct | file-dolly-d03d5896 | `vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 547 | 120 ms | 496 (+10%) | - | - | 473 (+16%) |
 | A40 | Qwen2.5-3B-Instruct | file-dolly-d03d5896 (budget-10m) | `vllm/bf16/ctx16384/b64/gmu0.95` | 504 | 47 ms | 506 (-0%) | - | - | 474 (+6%) |
+| A40 | Qwen2.5-3B-Instruct | file-dolly-d03d5896 (p95) | `vllm/bf16/ctx16384/b64/gmu0.95/pb16384/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 619 | 107 ms | 504 (+23%) | - | - | 475 (+30%) |
+| A40 | Qwen2.5-3B-Instruct | file-dolly-d03d5896 (p95-old-warmup) | `vllm/bf16/ctx8192/b64/gmu0.95/kvfp8_e5m2` | 523 | 55 ms | 495 (+6%) | - | - | 492 (+6%) |
+| A40 | Qwen2.5-3B-Instruct | file-dolly-d03d5896 (p95-old-warmup-budget) | `vllm/bf16/ctx8192/b64/gmu0.95` | 499 | 64 ms | 509 (-2%) | - | - | 475 (+5%) |
 | L4 | Qwen2.5-7B-Instruct | chat | `vllm/fp8/ctx8192/b64/gmu0.95` | 195 | 487 ms | 17 (+1036%), missed SLO | 195 (+0%) | 49 (+301%) | - |
 | L4 | Qwen2.5-7B-Instruct | sharegpt | `vllm/fp8/ctx8192/b64/gmu0.95/pb16384/kvfp8` | 738 | 985 ms | 410 (+80%) | 701 (+5%) | failed | - |
+| L4 | Qwen2.5-7B-Instruct | sharegpt (p95) | `vllm/fp8/ctx8192/b64/gmu0.95/pb8192` | 219 | 176 ms | 128 (+71%) | 212 (+3%) | - | - |
 | A40 | Qwen2.5-3B-Instruct | high-concurrency | `vllm/gptq/ctx8192/b256/gmu0.95 x2` | 3152 | 803 ms | 1715 (+84%) | 1346 (+134%) | - | - |
 | A40 | Qwen2.5-3B-Instruct | chat-system | `llamacpp-cuda/Q5_K_M/ctx16384/b8/ngl37/nb512/pb256/sd=ngram:64` | 455 | 171 ms | - | - | 157 (+190%) | - |
 | A40 | Qwen2.5-3B-Instruct | code-edit | `vllm/bf16/ctx8192/b256/gmu0.95/kvfp8_e5m2` | 483 | 64 ms | 459 (+5%) | - | 187 (+158%) | - |
@@ -223,6 +227,8 @@ Speculative decoding `ngram:4` by concurrency (throughput stops gaining at c=1, 
 
 | model | weights | accuracy | 95% CI | vs reference | lost / gained | p (McNemar) |
 |---|---|---|---|---|---|---|
+| Qwen2.5-3B-Instruct | bf16 | 86.4% | 84.4%–88.1% | reference | | |
+| Qwen2.5-3B-Instruct | w8a8 | 85.1% | 83.0%–86.9% | -1.3 pts vs bf16 | 66 / 49 | 0.135 |
 | Qwen2.5-3B-Instruct | bf16 | 87.2% | 85.3%–88.9% | reference | | |
 | Qwen2.5-3B-Instruct | fp8 | 84.8% | 82.8%–86.7% | -2.4 pts vs bf16 | 65 / 34 | 0.002 |
 | Qwen2.5-3B-Instruct | awq | 82.2% | 80.0%–84.2% | -5.0 pts vs bf16 | 119 / 53 | <0.001 |

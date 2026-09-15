@@ -1,0 +1,38 @@
+[
+ {
+  "label": "spec suffix",
+  "config": "vllm/bf16/ctx4096/b64/gmu0.90/sd=suffix:24",
+  "schedule": null,
+  "ok": true,
+  "error": null,
+  "levels": {
+   "1": {
+    "ok": true,
+    "tok_s": 263.9134231058644,
+    "ttft_ms": 73.54757632128894,
+    "ttft_p95_ms": 116.80981097742915,
+    "tpot_ms": 3.856725398316329,
+    "requests": 8,
+    "failed": 0
+   },
+   "8": {
+    "ok": true,
+    "tok_s": 1140.9861090111988,
+    "ttft_ms": 95.6422621384263,
+    "ttft_p95_ms": 461.51654003188014,
+    "tpot_ms": 6.524286750528141,
+    "requests": 32,
+    "failed": 0
+   },
+   "32": {
+    "ok": true,
+    "tok_s": 1636.7278852093727,
+    "ttft_ms": 319.45411767810583,
+    "ttft_p95_ms": 1914.7610319778323,
+    "tpot_ms": 15.729507931427307,
+    "requests": 64,
+    "failed": 0
+   }
+  }
+ }
+]

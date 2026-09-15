@@ -1,0 +1,74 @@
+[
+ {
+  "label": "base bf16",
+  "config": "vllm/bf16/ctx4096/b64/gmu0.90",
+  "schedule": null,
+  "ok": true,
+  "error": null,
+  "levels": {
+   "1": {
+    "ok": true,
+    "tok_s": 77.92236966171203,
+    "ttft_ms": 78.06826150044799,
+    "ttft_p95_ms": 119.19976817443967,
+    "tpot_ms": 12.543992520094621,
+    "requests": 8,
+    "failed": 0
+   },
+   "8": {
+    "ok": true,
+    "tok_s": 441.04563329302425,
+    "ttft_ms": 94.94505007751286,
+    "ttft_p95_ms": 477.90623316541314,
+    "tpot_ms": 14.68608706895289,
+    "requests": 32,
+    "failed": 0
+   },
+   "32": {
+    "ok": true,
+    "tok_s": 1040.3241496678631,
+    "ttft_ms": 231.40366561710835,
+    "ttft_p95_ms": 1884.539543185383,
+    "tpot_ms": 23.011008854992657,
+    "requests": 64,
+    "failed": 0
+   }
+  }
+ },
+ {
+  "label": "spec suffix",
+  "config": "vllm/bf16/ctx4096/b64/gmu0.90/sd=suffix:24",
+  "schedule": null,
+  "ok": true,
+  "error": null,
+  "levels": {
+   "1": {
+    "ok": true,
+    "tok_s": 262.970508640116,
+    "ttft_ms": 78.23305204510689,
+    "ttft_p95_ms": 117.44621815159917,
+    "tpot_ms": 3.8557959454163773,
+    "requests": 8,
+    "failed": 0
+   },
+   "8": {
+    "ok": true,
+    "tok_s": 1137.8929047374343,
+    "ttft_ms": 85.36742092110217,
+    "ttft_p95_ms": 485.2303392253816,
+    "tpot_ms": 6.967254111102911,
+    "requests": 32,
+    "failed": 0
+   },
+   "32": {
+    "ok": true,
+    "tok_s": 1648.5178971483992,
+    "ttft_ms": 330.896029016003,
+    "ttft_p95_ms": 1913.8666461221874,
+    "tpot_ms": 15.960527492011902,
+    "requests": 64,
+    "failed": 0
+   }
+  }
+ }
+]

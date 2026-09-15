@@ -3,10 +3,12 @@
 
     cd benchmarks/strategies && python ../summarize_strategies.py \
         --results results results-llamacpp results-layout results-disagg results-real results-real/v2 \
-            results-real/v3 results-real/sglang results-l4 results-cpu results-dolly results-dolly/budget-10m \
+            results-real/v3 results-real/sglang results-l4 results-l4/p95 results-cpu results-dolly \
+            results-dolly/budget-10m results-dolly/p95 results-dolly/p95-old-warmup results-dolly/p95-old-warmup-budget \
         --ablation ablation ablation-llamacpp ablation-real ablation-real/flashinfer ablation-l4 ablation-dolly \
         --quality quality-3b.json quality-7b.json --gguf-quality quality-gguf-3b.txt \
-        --task-quality task-quality-3b.json task-quality-7b.json task-quality-7b-l4.json --out SUMMARY.md
+        --task-quality task-quality-3b.json task-quality-7b.json task-quality-7b-l4.json task-quality-3b-w8a8.json \
+        --out SUMMARY.md
 """
 
 from __future__ import annotations

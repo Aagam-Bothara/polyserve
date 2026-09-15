@@ -1,0 +1,944 @@
+{
+  "polyserve_version": "0.1.0",
+  "hardware_hash": "4efbfaffaf18d7a8",
+  "hardware": {
+    "os": "Linux 6.8.0-136-generic",
+    "python": "3.11.11",
+    "gpus": [
+      {
+        "vendor": "nvidia",
+        "name": "NVIDIA A40",
+        "index": 0,
+        "compute_capability": [
+          8,
+          6
+        ],
+        "vram_total_bytes": 48305799168,
+        "vram_free_bytes": 47697690624,
+        "driver_version": "580.159.04",
+        "cuda_version": "13.0",
+        "uuid": "GPU-ba920568-2607-1ae3-3df2-297ace057377"
+      }
+    ],
+    "cpu": {
+      "model_name": "Intel(R) Xeon(R) Gold 6342 CPU @ 2.80GHz",
+      "physical_cores": 7,
+      "logical_cores": 7,
+      "avx2": true,
+      "avx512": true,
+      "ram_total_bytes": 540644089856,
+      "ram_free_bytes": 451950178304,
+      "arch": "x86_64"
+    },
+    "backends": {
+      "vllm": {
+        "name": "vllm",
+        "available": true,
+        "version": "0.29.0",
+        "reason": null
+      },
+      "vllm-cpu": {
+        "name": "vllm-cpu",
+        "available": false,
+        "version": "0.29.0",
+        "reason": "torch is a CUDA build; vLLM-CPU needs the CPU wheel"
+      },
+      "sglang": {
+        "name": "sglang",
+        "available": true,
+        "version": "0.5.19",
+        "reason": null
+      },
+      "llamacpp-cuda": {
+        "name": "llamacpp-cuda",
+        "available": false,
+        "version": null,
+        "reason": "llama-server not on PATH (set $LLAMA_SERVER)"
+      },
+      "llamacpp-cpu": {
+        "name": "llamacpp-cpu",
+        "available": false,
+        "version": null,
+        "reason": "llama-server not on PATH (set $LLAMA_SERVER)"
+      }
+    },
+    "probed_at": 1789420215.585776
+  },
+  "model_id": "Qwen/Qwen2.5-3B-Instruct",
+  "objective": "balanced",
+  "workload": "file-dolly-d03d5896",
+  "workload_spec": {
+    "name": "file-dolly-d03d5896",
+    "n_prompts": 32,
+    "prefill_tokens": 1536,
+    "decode_tokens": 512,
+    "concurrencies": [
+      1,
+      4,
+      8
+    ],
+    "ttft_ceiling_ms": 500.0,
+    "tpot_ceiling_ms": 50.0,
+    "shared_prefix_tokens": 0,
+    "seed": 0,
+    "source": "file:/workspace/dolly.jsonl",
+    "natural_stop": true,
+    "requests_per_slot": 4
+  },
+  "power_mode": "off",
+  "phases": "unified",
+  "layout": "single",
+  "replicas": 1,
+  "options": {
+    "budget": "600s",
+    "ttft": "p95"
+  },
+  "backend": "vllm",
+  "backend_version": "0.29.0",
+  "config": {
+    "backend": "vllm",
+    "quant": "bf16",
+    "ctx": 8192,
+    "batch": 64,
+    "gpu_memory_utilization": 0.95,
+    "n_gpu_layers": null,
+    "n_batch": null,
+    "prefill_budget": null,
+    "kv_dtype": "auto",
+    "prefix_cache": null,
+    "spec_decode": null,
+    "tp": 1,
+    "extra": {},
+    "power_limit_w": null,
+    "sm_clock_mhz": null
+  },
+  "prepared": {
+    "spec": {
+      "hf_id": "Qwen/Qwen2.5-3B-Instruct",
+      "revision": null
+    },
+    "backend": "vllm",
+    "arch": {
+      "architecture": "Qwen2ForCausalLM",
+      "num_layers": 36,
+      "hidden_size": 2048,
+      "num_attention_heads": 16,
+      "num_kv_heads": 2,
+      "head_dim": 128,
+      "vocab_size": 151936,
+      "max_position_embeddings": 32768,
+      "num_params": 3085938688,
+      "torch_dtype": "bfloat16"
+    },
+    "hf_path": "Qwen/Qwen2.5-3B-Instruct",
+    "gguf_paths": {},
+    "weights_bytes": {
+      "bf16": 6171877376
+    },
+    "hf_paths": {},
+    "draft_paths": {}
+  },
+  "prepared_all": {
+    "vllm": {
+      "spec": {
+        "hf_id": "Qwen/Qwen2.5-3B-Instruct",
+        "revision": null
+      },
+      "backend": "vllm",
+      "arch": {
+        "architecture": "Qwen2ForCausalLM",
+        "num_layers": 36,
+        "hidden_size": 2048,
+        "num_attention_heads": 16,
+        "num_kv_heads": 2,
+        "head_dim": 128,
+        "vocab_size": 151936,
+        "max_position_embeddings": 32768,
+        "num_params": 3085938688,
+        "torch_dtype": "bfloat16"
+      },
+      "hf_path": "Qwen/Qwen2.5-3B-Instruct",
+      "gguf_paths": {},
+      "weights_bytes": {
+        "bf16": 6171877376
+      },
+      "hf_paths": {},
+      "draft_paths": {}
+    },
+    "sglang": {
+      "spec": {
+        "hf_id": "Qwen/Qwen2.5-3B-Instruct",
+        "revision": null
+      },
+      "backend": "sglang",
+      "arch": {
+        "architecture": "Qwen2ForCausalLM",
+        "num_layers": 36,
+        "hidden_size": 2048,
+        "num_attention_heads": 16,
+        "num_kv_heads": 2,
+        "head_dim": 128,
+        "vocab_size": 151936,
+        "max_position_embeddings": 32768,
+        "num_params": 3085938688,
+        "torch_dtype": "bfloat16"
+      },
+      "hf_path": "Qwen/Qwen2.5-3B-Instruct",
+      "gguf_paths": {},
+      "weights_bytes": {
+        "bf16": 6171877376
+      },
+      "hf_paths": {},
+      "draft_paths": {}
+    }
+  },
+  "disagg": null,
+  "launch_args": [
+    "/usr/local/bin/vllm",
+    "serve",
+    "Qwen/Qwen2.5-3B-Instruct",
+    "--served-model-name",
+    "Qwen/Qwen2.5-3B-Instruct",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "0",
+    "--max-model-len",
+    "8192",
+    "--max-num-seqs",
+    "64",
+    "--gpu-memory-utilization",
+    "0.95",
+    "--dtype",
+    "bfloat16"
+  ],
+  "launch_env": {},
+  "calibration_table": [
+    {
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "quant",
+      "metrics": {
+        "tok_s": 520.1454769416282,
+        "ttft_ms": 57.76514019817114,
+        "ttft_p95_ms": 101.59782087430358,
+        "tpot_ms": 13.465332817316687,
+        "peak_mem_mb": 44108.125,
+        "gpu_util_pct": 98.14772727272727,
+        "power_w": 256.74285795454546,
+        "sm_clock_mhz": 1738.721590909091,
+        "joules_per_token": 0.49301563587531455,
+        "duration_s": 17.52971121389419,
+        "requests": 32,
+        "failed": 0,
+        "output_tokens": 9118,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 520.1454769416282,
+            "ttft_ms": 57.76514019817114,
+            "ttft_p95_ms": 101.59782087430358,
+            "tpot_ms": 13.465332817316687,
+            "peak_mem_mb": 44108.125,
+            "gpu_util_pct": 98.14772727272727,
+            "power_w": 256.74285795454546,
+            "sm_clock_mhz": 1738.721590909091,
+            "joules_per_token": 0.49301563587531455,
+            "duration_s": 17.52971121389419,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 9118,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420273.2714553,
+      "memory": {
+        "predicted": {
+          "config_key": "vllm/bf16/ctx8192/b64/gmu0.95",
+          "weights": 6171877376,
+          "kv_cache": 4831838208,
+          "runtime_workspace": 1610612736,
+          "safety_margin": 2384884531,
+          "total": 14999212851,
+          "budget": 45312806092,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 5928.96,
+          "kv_mb": 36700.16,
+          "workspace_mb": 899.0674999999974,
+          "non_kv_mb": 6828.027499999997,
+          "kv_tokens": 1043840,
+          "device_peak_mb": 43528.1875,
+          "baseline_mb": 579.9375,
+          "source": "vllm-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    },
+    {
+      "config": {
+        "backend": "sglang",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.93,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "quant",
+      "metrics": {
+        "tok_s": 490.2821229461731,
+        "ttft_ms": 40.57121090590954,
+        "ttft_p95_ms": 58.520692866295576,
+        "tpot_ms": 13.458649046273806,
+        "peak_mem_mb": 44426.625,
+        "gpu_util_pct": 99.6063829787234,
+        "power_w": 261.48366489361706,
+        "sm_clock_mhz": 1737.2074468085107,
+        "joules_per_token": 0.5315114616328898,
+        "duration_s": 18.77694406779483,
+        "requests": 32,
+        "failed": 0,
+        "output_tokens": 9206,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 490.2821229461731,
+            "ttft_ms": 40.57121090590954,
+            "ttft_p95_ms": 58.520692866295576,
+            "tpot_ms": 13.458649046273806,
+            "peak_mem_mb": 44426.625,
+            "gpu_util_pct": 99.6063829787234,
+            "power_w": 261.48366489361706,
+            "sm_clock_mhz": 1737.2074468085107,
+            "joules_per_token": 0.5315114616328898,
+            "duration_s": 18.77694406779483,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 9206,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420329.6843002,
+      "memory": {
+        "predicted": {
+          "config_key": "sglang/bf16/ctx8192/b64/gmu0.93",
+          "weights": 6171877376,
+          "kv_cache": 4831838208,
+          "runtime_workspace": 2147483648,
+          "safety_margin": 2384884531,
+          "total": 15536083763,
+          "budget": 44924393226,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 6021.12,
+          "kv_mb": 35962.88,
+          "workspace_mb": 1862.6875,
+          "non_kv_mb": 7883.8075,
+          "kv_tokens": 1023128,
+          "device_peak_mb": 43846.6875,
+          "baseline_mb": 579.9375,
+          "source": "sglang-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    },
+    {
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "kv",
+      "metrics": {
+        "tok_s": 523.227597858619,
+        "ttft_ms": 73.7149529159069,
+        "ttft_p95_ms": 90.16225719824433,
+        "tpot_ms": 13.620952410527842,
+        "peak_mem_mb": 44526.125,
+        "gpu_util_pct": 97.2,
+        "power_w": 257.099056,
+        "sm_clock_mhz": 1737.78,
+        "joules_per_token": 0.48980122001066684,
+        "duration_s": 24.989125293679535,
+        "requests": 32,
+        "failed": 0,
+        "output_tokens": 13075,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 523.227597858619,
+            "ttft_ms": 73.7149529159069,
+            "ttft_p95_ms": 90.16225719824433,
+            "tpot_ms": 13.620952410527842,
+            "peak_mem_mb": 44526.125,
+            "gpu_util_pct": 97.2,
+            "power_w": 257.099056,
+            "sm_clock_mhz": 1737.78,
+            "joules_per_token": 0.48980122001066684,
+            "duration_s": 24.989125293679535,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 13075,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420394.4426115,
+      "memory": {
+        "predicted": {
+          "config_key": "vllm/bf16/ctx8192/b64/gmu0.95/kvfp8_e5m2",
+          "weights": 6171877376,
+          "kv_cache": 2415919104,
+          "runtime_workspace": 1610612736,
+          "safety_margin": 2384884531,
+          "total": 12583293747,
+          "budget": 45312806092,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 5928.96,
+          "kv_mb": 36597.76,
+          "workspace_mb": 1419.4674999999988,
+          "non_kv_mb": 7348.427499999999,
+          "kv_tokens": 2082112,
+          "device_peak_mb": 43946.1875,
+          "baseline_mb": 579.9375,
+          "source": "vllm-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    },
+    {
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "int8_per_token_head",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "kv",
+      "metrics": {
+        "tok_s": 461.9516667536179,
+        "ttft_ms": 74.5764400344342,
+        "ttft_p95_ms": 606.5016197972,
+        "tpot_ms": 13.484570144870345,
+        "peak_mem_mb": 43492.125,
+        "gpu_util_pct": 96.37899159663866,
+        "power_w": 260.35471584415586,
+        "sm_clock_mhz": 1739.2187165775401,
+        "joules_per_token": 0.7054051513973157,
+        "duration_s": 36.1095167840831,
+        "requests": 48,
+        "failed": 0,
+        "output_tokens": 13281,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 461.9516667536179,
+            "ttft_ms": 74.5764400344342,
+            "ttft_p95_ms": 606.5016197972,
+            "tpot_ms": 13.484570144870345,
+            "peak_mem_mb": 43492.125,
+            "gpu_util_pct": 94.52941176470588,
+            "power_w": 256.0904545454546,
+            "sm_clock_mhz": 1739.0374331550802,
+            "joules_per_token": 0.5526925004485806,
+            "duration_s": 18.66429027216509,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 8622,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          },
+          "4": {
+            "tok_s": 267.0644601156152,
+            "ttft_ms": 56.61286739632487,
+            "ttft_p95_ms": 95.08478175848722,
+            "tpot_ms": 12.938123010602254,
+            "peak_mem_mb": 43492.125,
+            "gpu_util_pct": 98.22857142857143,
+            "power_w": 264.61897714285715,
+            "sm_clock_mhz": 1739.4,
+            "joules_per_token": 0.9880169729212465,
+            "duration_s": 17.44522651191801,
+            "requests": 16,
+            "failed": 0,
+            "output_tokens": 4659,
+            "concurrency": 4,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420484.9679863,
+      "memory": {
+        "predicted": {
+          "config_key": "vllm/bf16/ctx8192/b64/gmu0.95/kvint8_per_token_head",
+          "weights": 6171877376,
+          "kv_cache": 2566914048,
+          "runtime_workspace": 1610612736,
+          "safety_margin": 2384884531,
+          "total": 12734288691,
+          "budget": 45312806092,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 5928.96,
+          "kv_mb": 35696.64,
+          "workspace_mb": 1286.5875000000015,
+          "non_kv_mb": 7215.5475000000015,
+          "kv_tokens": 1969264,
+          "device_peak_mb": 42912.1875,
+          "baseline_mb": 579.9375,
+          "source": "vllm-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    },
+    {
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "ngram_gpu:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "spec",
+      "metrics": {
+        "tok_s": 429.7524893163658,
+        "ttft_ms": 52.78113950043917,
+        "ttft_p95_ms": 1012.8409750759602,
+        "tpot_ms": 13.789082788937915,
+        "peak_mem_mb": 43520.125,
+        "gpu_util_pct": 86.4784606034606,
+        "power_w": 240.17212421349922,
+        "sm_clock_mhz": 1738.1000643500643,
+        "joules_per_token": 0.6743079278179503,
+        "duration_s": 33.61103515420109,
+        "requests": 48,
+        "failed": 0,
+        "output_tokens": 11902,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 429.7524893163658,
+            "ttft_ms": 52.78113950043917,
+            "ttft_p95_ms": 1012.8409750759602,
+            "tpot_ms": 13.789082788937915,
+            "peak_mem_mb": 43520.125,
+            "gpu_util_pct": 83.17989417989418,
+            "power_w": 233.89032275132274,
+            "sm_clock_mhz": 1737.6190476190477,
+            "joules_per_token": 0.5439560429645367,
+            "duration_s": 18.829442996066064,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 8092,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          },
+          "4": {
+            "tok_s": 257.7530187032777,
+            "ttft_ms": 47.68300405703485,
+            "ttft_p95_ms": 65.0310879573226,
+            "tpot_ms": 13.479620408602491,
+            "peak_mem_mb": 43520.125,
+            "gpu_util_pct": 89.77702702702703,
+            "power_w": 246.45392567567566,
+            "sm_clock_mhz": 1738.581081081081,
+            "joules_per_token": 0.9511602774856207,
+            "duration_s": 14.781592158135027,
+            "requests": 16,
+            "failed": 0,
+            "output_tokens": 3810,
+            "concurrency": 4,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420590.5814092,
+      "memory": {
+        "predicted": {
+          "config_key": "vllm/bf16/ctx8192/b64/gmu0.95/sd=ngram_gpu:4",
+          "weights": 6171877376,
+          "kv_cache": 4831838208,
+          "runtime_workspace": 1610612736,
+          "safety_margin": 2384884531,
+          "total": 14999212851,
+          "budget": 45312806092,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 5928.96,
+          "kv_mb": 35430.4,
+          "workspace_mb": 1580.8274999999994,
+          "non_kv_mb": 7509.787499999999,
+          "kv_tokens": 1007888,
+          "device_peak_mb": 42940.1875,
+          "baseline_mb": 579.9375,
+          "source": "vllm-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    },
+    {
+      "config": {
+        "backend": "vllm",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.95,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "auto",
+        "prefix_cache": null,
+        "spec_decode": "draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "spec",
+      "metrics": {
+        "tok_s": 520.7863565010535,
+        "ttft_ms": 93.58976222574711,
+        "ttft_p95_ms": 1212.9526692442596,
+        "tpot_ms": 10.61394743409962,
+        "peak_mem_mb": 43854.125,
+        "gpu_util_pct": 93.06848484848484,
+        "power_w": 236.6337549035813,
+        "sm_clock_mhz": 1737.5822314049587,
+        "joules_per_token": 0.5374574431479858,
+        "duration_s": 27.037027342710644,
+        "requests": 48,
+        "failed": 0,
+        "output_tokens": 11812,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 520.7863565010535,
+            "ttft_ms": 93.58976222574711,
+            "ttft_p95_ms": 1212.9526692442596,
+            "tpot_ms": 10.61394743409962,
+            "peak_mem_mb": 43854.125,
+            "gpu_util_pct": 87.77333333333333,
+            "power_w": 229.5682866666667,
+            "sm_clock_mhz": 1736.9,
+            "joules_per_token": 0.4398442632769768,
+            "duration_s": 14.946628118865192,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 7784,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          },
+          "4": {
+            "tok_s": 333.1569061884841,
+            "ttft_ms": 82.89953111670911,
+            "ttft_p95_ms": 111.96635197848082,
+            "tpot_ms": 9.67675746975964,
+            "peak_mem_mb": 43854.125,
+            "gpu_util_pct": 98.36363636363636,
+            "power_w": 243.69922314049586,
+            "sm_clock_mhz": 1738.2644628099174,
+            "joules_per_token": 0.7260922475461822,
+            "duration_s": 12.090399223845452,
+            "requests": 16,
+            "failed": 0,
+            "output_tokens": 4028,
+            "concurrency": 4,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420678.0204186,
+      "memory": {
+        "predicted": {
+          "config_key": "vllm/bf16/ctx8192/b64/gmu0.95/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4",
+          "weights": 6171877376,
+          "kv_cache": 4831838208,
+          "runtime_workspace": 1610612736,
+          "safety_margin": 2384884531,
+          "total": 14999212851,
+          "budget": 45312806092,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 6891.52,
+          "kv_mb": 34867.2,
+          "workspace_mb": 1515.4674999999988,
+          "non_kv_mb": 8406.9875,
+          "kv_tokens": 743904,
+          "device_peak_mb": 43274.1875,
+          "baseline_mb": 579.9375,
+          "source": "vllm-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    },
+    {
+      "config": {
+        "backend": "sglang",
+        "quant": "bf16",
+        "ctx": 8192,
+        "batch": 64,
+        "gpu_memory_utilization": 0.93,
+        "n_gpu_layers": null,
+        "n_batch": null,
+        "prefill_budget": null,
+        "kv_dtype": "fp8_e5m2",
+        "prefix_cache": null,
+        "spec_decode": null,
+        "tp": 1,
+        "extra": {},
+        "power_limit_w": null,
+        "sm_clock_mhz": null
+      },
+      "stage": "kv",
+      "metrics": {
+        "tok_s": 523.0097342555209,
+        "ttft_ms": 79.14136094041169,
+        "ttft_p95_ms": 125.96498103812337,
+        "tpot_ms": 13.438010999570347,
+        "peak_mem_mb": 44490.625,
+        "gpu_util_pct": 99.2258064516129,
+        "power_w": 263.5391612903226,
+        "sm_clock_mhz": 1737.52688172043,
+        "joules_per_token": 0.504174646802808,
+        "duration_s": 27.79871778236702,
+        "requests": 32,
+        "failed": 0,
+        "output_tokens": 14539,
+        "concurrency": 8,
+        "telemetry_source": "llmtrace",
+        "token_count_source": "usage",
+        "prompt_tokens": 63,
+        "by_concurrency": {
+          "8": {
+            "tok_s": 523.0097342555209,
+            "ttft_ms": 79.14136094041169,
+            "ttft_p95_ms": 125.96498103812337,
+            "tpot_ms": 13.438010999570347,
+            "peak_mem_mb": 44490.625,
+            "gpu_util_pct": 99.2258064516129,
+            "power_w": 263.5391612903226,
+            "sm_clock_mhz": 1737.52688172043,
+            "joules_per_token": 0.504174646802808,
+            "duration_s": 27.79871778236702,
+            "requests": 32,
+            "failed": 0,
+            "output_tokens": 14539,
+            "concurrency": 8,
+            "telemetry_source": "llmtrace",
+            "token_count_source": "usage",
+            "prompt_tokens": 63,
+            "by_concurrency": {},
+            "errors": []
+          }
+        },
+        "errors": []
+      },
+      "launched": true,
+      "error": null,
+      "started_at": 1789420783.5827906,
+      "memory": {
+        "predicted": {
+          "config_key": "sglang/bf16/ctx8192/b64/gmu0.93/kvfp8_e5m2",
+          "weights": 6171877376,
+          "kv_cache": 2415919104,
+          "runtime_workspace": 2147483648,
+          "safety_margin": 2384884531,
+          "total": 13120164659,
+          "budget": 44924393226,
+          "feasible": true
+        },
+        "measured": {
+          "weights_mb": 6021.12,
+          "kv_mb": 35962.88,
+          "workspace_mb": 1926.6875,
+          "non_kv_mb": 7947.8075,
+          "kv_tokens": 2046257,
+          "device_peak_mb": 43910.6875,
+          "baseline_mb": 579.9375,
+          "source": "sglang-log",
+          "details": {
+            "workspace_derived": 1.0
+          }
+        }
+      },
+      "disagg": null,
+      "replicas": 1
+    }
+  ],
+  "calibration_seconds": 563.5505279288627,
+  "calibration_trials": 7,
+  "llmtrace_version": "0.2.0",
+  "created_at": 1789420784.2224665,
+  "notes": [
+    "sglang came within 10% of the leading vllm after the precision stage, so it was tuned as well",
+    "sglang came within 10% of the leading vllm after the batch stage, so it was tuned as well",
+    "calibration budget of 600s reached after 7 trials; skipped 13: memory vllm/bf16/ctx16384/b64/gmu0.95; memory sglang/bf16/ctx16384/b64/gmu0.93; batch vllm/bf16/ctx8192/b16/gmu0.95; batch vllm/bf16/ctx8192/b256/gmu0.95; batch sglang/bf16/ctx8192/b16/gmu0.93; and 8 more",
+    "winner scored at concurrency 8: 520.1 tok/s, TTFT 58 ms (p95 102), 0.493 J/tok",
+    "calibration took 564s over 7 trials",
+    "workload: file-dolly-d03d5896: 32 dolly.jsonl prompts of up to 1536 tokens, answers up to 512 tokens (natural stop), concurrency 1/4/8, TTFT ceiling 500 ms, TPOT ceiling 50 ms"
+  ]
+}
