@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from polyserve import __version__
 from polyserve import cache as profile_cache
 from polyserve.backends import BaseBackend, registry as backend_registry
-from polyserve.calibrate.objectives import Constraints
+from polyserve.calibrate.objectives import Constraints, close_call_level
 from polyserve.calibrate.search import ProgressFn, StagedSearch, SubprocessTrialRunner, TrialRunner
 from polyserve.calibrate.workload import Workload, get_workload
 from polyserve.hardware import hardware_hash, llmtrace_version, probe
@@ -337,6 +337,7 @@ def calibrate(
             log_dir=log_dir or (profile_cache.logs_dir() / spec.safe_id),
             power=controller,
             enough=level_rule(objective, constraints, opts, points),
+            close_call=close_call_level(objective, constraints),
         )
     from polyserve.predict import Predictor
 

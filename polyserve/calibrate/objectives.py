@@ -26,6 +26,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Sequence, Tuple
 
+from polyserve.calibrate.tail import quantile_interval
 from polyserve.models import OBJECTIVES, TrialMetrics, TrialResult
 
 
@@ -149,6 +150,25 @@ def enough_level(objective: str, cons: Optional[Constraints] = None) -> Optional
         return tpot_ceiling is None or tpot <= tpot_ceiling
 
     return enough
+
+
+def close_call_level(objective: str, cons: Optional[Constraints] = None,
+                     confidence: float = 0.95) -> Optional[Callable[[TrialMetrics], bool]]:
+    """Whether a level's tail is too close to its ceiling to judge from its own requests: the ceiling lies inside
+    the confidence interval of the percentile it applies to (calibrate/tail.py). Such a level is measured again.
+    Only `balanced` judges a tail against a ceiling, so the rest get None."""
+    if objective != "balanced":
+        return None
+    cons = cons or Constraints()
+    q = 0.95 if cons.ttft_percentile >= 95 else 0.5
+
+    def close(m: TrialMetrics) -> bool:
+        if not m.ok or not m.ttft_samples_ms:
+            return False
+        low, high = quantile_interval(m.ttft_samples_ms, q, confidence)
+        return low <= cons.ttft_ceiling_ms <= high
+
+    return close
 
 
 def _sort_key(x: Ranked) -> Tuple[bool, float, float]:

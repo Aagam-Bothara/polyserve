@@ -374,6 +374,7 @@ def _metrics_from(outcomes: List[RequestOutcome], wall_s: float, concurrency: in
     ttfts = sorted(o.ttft_s * 1000 for o in ok)
     m.ttft_ms = statistics.median(ttfts)
     m.ttft_p95_ms = ttfts[min(len(ttfts) - 1, int(round(0.95 * (len(ttfts) - 1))))]
+    m.ttft_samples_ms = [round(t, 1) for t in ttfts]
     tpots = [(o.duration_s - o.ttft_s) * 1000 / (o.tokens - 1) for o in ok if o.tokens > 1]
     m.tpot_ms = statistics.fmean(tpots) if tpots else None
     m.tok_s = m.output_tokens / wall_s if wall_s > 0 else 0.0
@@ -462,6 +463,7 @@ def run_trial(
     counter: Optional[TokenCounter] = None,
     clients: int = 1,
     enough: Optional[Callable[[TrialMetrics], bool]] = None,
+    close_call: Optional[Callable[[TrialMetrics], bool]] = None,
 ) -> TrialMetrics:
     """Run the workload at each concurrency level and fold into one TrialMetrics.
 
@@ -472,6 +474,10 @@ def run_trial(
     it accepts: when the objective scores a trial by its throughput, a lower level cannot beat a level
     that already meets the constraints. Re-scored this way, 115 recorded trials in six calibrations on
     an A40 kept every score and every pick. A level keeps its own prompts whatever the order.
+
+    `close_call` (see objectives.close_call_level) flags a level whose tail is too close to its ceiling to call
+    from its requests; that level is measured again with as many requests on fresh prompts, inside the same
+    telemetry window, and judged on both runs together.
 
     Summary rule: tok/s and TTFT/TPOT come from the concurrency level with the highest
     throughput (that is the load the server would actually be run at); energy per token
@@ -518,14 +524,25 @@ def run_trial(
         n = level.level_requests(c)
         if n < len(level.prompts):
             level = replace(level, prompts=level.prompts[:n], n_prompts=n)
-        with Telemetry(hooks, pid=pid) as tel:
+        def drive(lw: Workload) -> Tuple[List[RequestOutcome], float]:
             if clients > 1:
-                outcomes, wall = _drive_clients(base_url, hooks, level, c, request_timeout, clients)
-            else:
-                t0 = time.perf_counter()
-                outcomes = asyncio.run(_drive(base_url, hooks, level, c, request_timeout, counter))
-                wall = time.perf_counter() - t0
+                return _drive_clients(base_url, hooks, lw, c, request_timeout, clients)
+            t0 = time.perf_counter()
+            got = asyncio.run(_drive(base_url, hooks, lw, c, request_timeout, counter))
+            return got, time.perf_counter() - t0
+
+        resampled = False
+        with Telemetry(hooks, pid=pid) as tel:
+            outcomes, wall = drive(level)
+            if close_call is not None and close_call(_metrics_from(outcomes, wall, c)):
+                # Too close to the ceiling to call from these requests: as many again, on prompts of their own.
+                extra = _level_workload(workload, k + len(workload.concurrencies), counter)
+                if n < len(extra.prompts):
+                    extra = replace(extra, prompts=extra.prompts[:n], n_prompts=n)
+                more, more_wall = drive(extra)
+                outcomes, wall, resampled = outcomes + more, wall + more_wall, True
         m = _metrics_from(outcomes, wall, c)
+        m.resampled = resampled
         s = tel.summary
         source = s.source if s.source != "none" else source
         m.telemetry_source = s.source

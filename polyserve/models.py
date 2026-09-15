@@ -239,6 +239,10 @@ class TrialMetrics(BaseModel):
     prompt_tokens: int = 0  # mean measured prompt length (0 if no tokenizer)
     by_concurrency: Dict[str, "TrialMetrics"] = Field(default_factory=dict)
     errors: List[str] = Field(default_factory=list)  # up to three distinct request errors, when requests failed
+    # Every successful request's time to first token, sorted, in ms: what a percentile's confidence interval
+    # needs (calibrate/tail.py). Kept per concurrency level.
+    ttft_samples_ms: List[float] = Field(default_factory=list)
+    resampled: bool = False  # the level was too close to its ceiling to call and was measured again
 
     # A trial is not invalidated by a couple of degenerate requests. Small models sometimes emit
     # end-of-sequence immediately, producing no tokens; a backend that is actually broken fails

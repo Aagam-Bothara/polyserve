@@ -73,6 +73,7 @@ class SubprocessTrialRunner:
         power: Optional[object] = None,
         power_settle_s: float = 2.0,
         enough: Optional[Callable[[TrialMetrics], bool]] = None,
+        close_call: Optional[Callable[[TrialMetrics], bool]] = None,
     ):
         self.backends = backends
         self.models = models
@@ -84,6 +85,7 @@ class SubprocessTrialRunner:
         self.power = power  # polyserve.power.PowerController, or None when energy tuning is off
         self.power_settle_s = power_settle_s
         self.enough = enough  # measure levels highest first and stop early (objectives.enough_level)
+        self.close_call = close_call  # measure a level again when its tail is too close to call (close_call_level)
 
     def _apply_power(self, cfg: Config) -> Optional[str]:
         """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
@@ -148,7 +150,7 @@ class SubprocessTrialRunner:
                 return TrialResult(config=cfg, stage=stage, metrics=TrialMetrics(), error=perr, memory=observation)
             metrics = run_trial(
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
-                request_timeout=self.request_timeout, enough=self.enough,
+                request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
             )
             observation.measured = merge(
                 parse_log(cfg.backend, proc.tail_log(400)), metrics.peak_mem_mb, baseline_mb,
