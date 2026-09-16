@@ -251,8 +251,22 @@ def quality_probe_for(opts, workload):
 
     from polyserve.quality import QualityProbe
 
-    # Sixteen prompts catch a precision that answers differently without adding a minute per trial.
-    prompts = list(replace(workload, prompts=[], fitted=False).ensure_prompts().prompts)[:16]
+    # Up to 48 prompts, answered twice per precision at 32 tokens each: enough that one changed answer is about
+    # 2% rather than the 6% sixteen gave, and still seconds of generation. A workload materialises one
+    # concurrency level's prompts at a time (32 on the chat preset), so later levels are drawn at their own
+    # offsets until there are enough; a synthetic workload regenerates the same prompts, hence the de-duplication.
+    wanted, seen, prompts = 48, set(), []
+    base = replace(workload, prompts=[], fitted=False)
+    for k in range(4):
+        level = replace(base, prompts=[], fitted=False,
+                        sample_offset=base.sample_offset + k * max(1, base.n_prompts)).ensure_prompts()
+        for text in level.prompts:
+            if text not in seen:
+                seen.add(text)
+                prompts.append(text)
+        if len(prompts) >= wanted:
+            break
+    prompts = prompts[:wanted]
     if not prompts:
         logging.getLogger(__name__).warning(
             "--max-quality-loss %.3f was asked for, but workload %s produced no prompts to compare answers on; "

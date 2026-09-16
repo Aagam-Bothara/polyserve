@@ -123,12 +123,19 @@ that runs is dropped like a configuration that cannot fit. That needs no labelle
 drift on the user's own prompts rather than accuracy on a benchmark — it says these weights answer differently,
 not that they answer worse.
 
-Two things about it are worth stating plainly. Its first run on hardware did nothing at all: the probe was never
+Three things about it are worth stating plainly. Its first run on hardware did nothing at all: the probe was never
 built, because the guard tested prompts that a file workload only materialises later, so a 14B calibration kept a
-4-bit checkpoint that had been compared against nothing (fixed, with a regression test). And even working, it is
-not an accuracy guarantee — sixteen instruction-following prompts can agree perfectly while multi-step arithmetic
-degrades, which is exactly what happened on that card: zero drift would have been reported where GSM8K lost about
-2 points ([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). Labelled grading stays a separate step.
+4-bit checkpoint that had been compared against nothing (fixed, with a regression test).
+
+Its first design was also too strict to be useful. Comparing whole 128-token greedy completions across 16 prompts
+meant one changed answer was 6% — past any sane tolerance — and greedy decoding diverges as soon as a single
+token differs, so nearly every cheaper precision would have been refused, with nothing to distinguish a real
+change from the engine's own non-determinism. It now compares the first 32 tokens of 48 answers and measures each
+precision twice, so the reference's disagreement with itself is the floor a candidate must clear.
+
+And even working, it is not an accuracy guarantee: instruction-following answers can agree perfectly while
+multi-step arithmetic degrades, which is exactly what happened on that card — near-zero drift where GSM8K lost
+about 2 points ([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). Labelled grading stays a separate step.
 
 The separate, labelled check remains, because calibration measures speed and latency, and quantization can cost
 accuracy that no throughput number shows. The separate check is deliberately narrow and its narrowness is the weak point: GSM8K only, where
