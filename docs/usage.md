@@ -167,6 +167,7 @@ polyserve plan <model>          # print feasible configs without running them
 polyserve bench <model>         # run calibration and print the table, don't serve
 polyserve recalibrate <model>   # force a rerun and overwrite the cached profile
 polyserve profiles              # list cached profiles
+polyserve profiles --trace X    # redraw the search behind a profile (part of its model id, or a profile JSON path)
 polyserve compare <model>       # PolyServe's pick vs stock defaults vs Ollama, one workload -> results JSON
                                 #   --repeats 3: every row measured 3x interleaved; median, spread, noise flags
                                 #   --eval-workload-file B: calibrate on --workload-file A, measure every row on B
@@ -179,6 +180,8 @@ polyserve power reset           # undo a power cap or clock lock left behind by 
 ```
 
 To start serving without waiting for benchmarks, use `--skip-calibration`. This launches the first candidate backend with default settings and does not cache a profile.
+
+**Watching the search.** On a terminal, a calibration draws itself while it runs: one row per stage, one bar per trial scaled to the best result so far, the current leader named with its throughput, failed trials in red and trials that break the latency limits in yellow. It is the same information the log lines carry, in the shape of the search, so a glance says which stage is running and whether anything has beaten the leader. Redirected output — CI, `nohup`, a log file a script greps — keeps the one line per trial instead, unchanged. `polyserve profiles --trace <model or profile.json>` redraws the search of a calibration that already finished, including the ones in `benchmarks/strategies/results-llama/profiles/`.
 
 ## Backend interface
 

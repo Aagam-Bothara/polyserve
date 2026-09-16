@@ -132,6 +132,36 @@ def _progress_for(objective: str, cons):
     return lambda stage, cfg, res: err.print(_progress_line(stage, cfg, res, objective, cons))
 
 
+def _search_view(objective: str, cons):
+    """The search drawn as it runs. On a terminal it is a picture; piped, it is the same per-trial lines as
+    before, so logs that scripts grep are unchanged."""
+    from polyserve.searchview import SearchView
+
+    return SearchView(err, objective=objective, constraints=cons, fallback=_progress_for(objective, cons))
+
+
+def _trace(which: str) -> None:
+    """Redraw a finished search: a path to a profile JSON, or part of a cached profile's model id."""
+    from polyserve import cache as profile_cache
+    from polyserve.searchview import SearchView
+
+    path = Path(which)
+    if path.is_file():
+        p = Profile.model_validate_json(path.read_text(encoding="utf-8"))
+    else:
+        matches = [pr for _, pr in profile_cache.list_profiles() if which.lower() in pr.model_id.lower()]
+        if not matches:
+            err.print(f"[red]no cached profile matching {which}[/]")
+            raise typer.Exit(2)
+        p = matches[0]
+    if not p.calibration_table:
+        err.print("[yellow]that profile has no calibration table: it was served without a search[/]")
+        raise typer.Exit(2)
+    view = SearchView.from_trials(p.calibration_table, console, winner=_winner_key(p), objective=p.objective,
+                                  notes=p.notes)
+    console.print(view.render())
+
+
 def _workload(name: str, file: Optional[Path] = None):
     from polyserve.calibrate.workload import WORKLOAD_NAMES, get_workload, workload_from_file
 
@@ -443,19 +473,21 @@ def bench(
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
-    profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=_progress_for(objective, cons),
+    view = _search_view(objective, cons)
+    profile = calibrate(hw, spec, objective, result, reg, workload=wl, constraints=cons, progress=view.progress,
                         power_mode=power, options=opts)
     if phases != "unified":
         from polyserve.disagg import calibrate_disaggregated
 
         profile = calibrate_disaggregated(hw, spec, objective, profile, reg, workload=wl, constraints=cons,
-                                          phases=phases, connector=kv_connector, progress=_progress_for(objective, cons),
+                                          phases=phases, connector=kv_connector, progress=view.progress,
                                           power_mode=power)
     if layout != "single":
         from polyserve.layout import calibrate_layout
 
         profile = calibrate_layout(hw, objective, profile, reg, layout, workload=wl, constraints=cons,
-                                   progress=_progress_for(objective, cons))
+                                   progress=view.progress)
+    view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
     if save:
@@ -491,13 +523,14 @@ def recalibrate(
     from polyserve.pipeline import resolve_profile
 
     wl = _workload(workload, workload_file)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
+    view = _search_view(objective, cons)
     profile = resolve_profile(ModelSpec(hf_id=model), objective, force_backend=backend, recalibrate=True,
-                              workload=wl,
-                              constraints=(cons := _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling,
-                                                                ttft_percentile)),
-                              progress=_progress_for(objective, cons), on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              workload=wl, constraints=cons,
+                              progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore), layout=layout)
+    view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
 
@@ -549,10 +582,12 @@ def compare(
     cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
     hw = _probe()
     spec = ModelSpec(hf_id=model)
+    view = _search_view(objective, cons)
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
-                              progress=_progress_for(objective, cons), hw=hw, on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              progress=view.progress, hw=hw, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore), layout=layout)
+    view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
@@ -704,10 +739,16 @@ def memory_report(
 
 
 @app.command()
-def profiles() -> None:
-    """List cached profiles."""
+def profiles(
+    trace: Optional[str] = typer.Option(None, "--trace", help="Draw the search behind one profile: part of a "
+                                                             "cached profile's model id, or a path to a profile JSON"),
+) -> None:
+    """List cached profiles, or draw the search behind one."""
     from polyserve import cache as profile_cache
 
+    if trace is not None:
+        _trace(trace)
+        return
     rows = profile_cache.list_profiles()
     if not rows:
         console.print(f"no profiles under {profile_cache.profiles_dir()}")
@@ -762,13 +803,14 @@ def serve(
 
     wl = _workload(workload, workload_file)
     spec = ModelSpec(hf_id=model)
+    cons = _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling, ttft_percentile)
+    view = _search_view(objective, cons)
     profile = resolve_profile(spec, objective, force_backend=backend, skip_calibration=skip_calibration,
-                              workload=wl,
-                              constraints=(cons := _constraints(ttft_ceiling, tok_s_floor, wl, tpot_ceiling,
-                                                                ttft_percentile)),
-                              progress=_progress_for(objective, cons), on_stage=lambda s: err.print(f"[dim]-> {s}[/]"),
+                              workload=wl, constraints=cons,
+                              progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
                               options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore), layout=layout)
+    view.stop()
     _print_profile(profile)
     if profile.prepared is None:
         err.print("[red]profile has no prepared model; run `polyserve recalibrate`[/]")
