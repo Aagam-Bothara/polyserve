@@ -328,6 +328,9 @@ class StagedSearch:
     # --max-quality-loss: a polyserve.quality.QualityProbe. Stage 1 drops a precision whose greedy answers
     # drift further from the most faithful precision's than the tolerance allows. None = quality is not gated.
     quality: Optional[object] = None
+    # (backend, quant) pairs the gate refused. Their trials stay in the table, because the profile should show
+    # what they measured, but `_eligible` keeps them out of every choice of leader or winner.
+    refused: set = field(default_factory=set)
     # Stage 5: re-measure the leader and up to confirm_top - 1 others within confirm_band of it,
     # confirm_rounds times each in turn, and choose on those runs alone (0 = off).
     confirm_top: int = 0
@@ -445,8 +448,20 @@ class StagedSearch:
             self.progress(stage, cfg, res)
         return res
 
+    def _eligible(self, results: Sequence[TrialResult]) -> List[TrialResult]:
+        """The trials that may still win.
+
+        Dropping a refused precision from stage 1's `kept` only stops it being tuned further; the winner is the
+        objective's argmax over every successful trial, so a precision the gate refused could still be served if
+        its stage-1 baseline happened to be fastest. That is exactly what happened on a 14B on an RTX 4090: the
+        gate refused 4-bit GPTQ on drift and the search picked it anyway.
+        """
+        if not self.refused:
+            return list(results)
+        return [r for r in results if (r.config.backend, r.config.quant) not in self.refused]
+
     def _best_of(self, results: Sequence[TrialResult]) -> Optional[TrialResult]:
-        winner, _ = pick(results, self.objective, self.constraints)
+        winner, _ = pick(self._eligible(results), self.objective, self.constraints)
         return winner
 
     # ---- stages
@@ -531,6 +546,7 @@ class StagedSearch:
                 why = self.quality.too_far(*key)
                 if why:
                     self.notes.append(why)
+                    self.refused.add(key)  # not tuned further, and not eligible to win either
                 else:
                     allowed.append(key)
             self.notes.extend(self.quality.summary())
@@ -741,7 +757,7 @@ class StagedSearch:
         """Whether an engine tuned before this one now leads it by more than contender_band while this one
         offers nothing that engine lacks, so its later stages cannot pay: on an RTX 4090 SGLang, with no
         speculative decoding, spent 11 of 66 minutes on stages that ended 15% behind vLLM with it."""
-        ranked = rank(self.results, self.objective, self.constraints)
+        ranked = rank(self._eligible(self.results), self.objective, self.constraints)
         if not ranked or self.contender_band <= 0:
             return False
         lead = ranked[0]
@@ -762,7 +778,8 @@ class StagedSearch:
     def _spec_settings(self, backend: str) -> List[Optional[str]]:
         """The engine's spec_beam best speculation settings, best first; no speculation counts as one."""
         out: List[Optional[str]] = []
-        for x in rank([r for r in self.results if r.config.backend == backend], self.objective, self.constraints):
+        for x in rank([r for r in self._eligible(self.results) if r.config.backend == backend],
+                      self.objective, self.constraints):
             s = x.result.config.spec_decode
             if s not in out:
                 out.append(s)
@@ -775,7 +792,7 @@ class StagedSearch:
         further behind when a variant stage has something for that engine and nothing for the leader's: on an
         RTX 4090, SGLang in fp8 led vLLM by 14% with Llama 3.1 8B, and only vLLM has speculative decoding,
         worth 57-93% with a draft model on the other cards."""
-        ranked = rank(self.results, self.objective, self.constraints)
+        ranked = rank(self._eligible(self.results), self.objective, self.constraints)
         if not ranked:
             return []
         lead = ranked[0]
@@ -891,7 +908,7 @@ class StagedSearch:
         config is represented by its median run, the worse of the middle two for an even count. Returns
         those runs, or None when nothing could be re-measured.
         """
-        ranked = rank(self.results, self.objective, self.constraints)
+        ranked = rank(self._eligible(self.results), self.objective, self.constraints)
         feasible = [x for x in ranked if x.feasible]
         if feasible:
             best = min(x.score for x in feasible)
@@ -995,7 +1012,7 @@ class StagedSearch:
             if not self._outpaced(base):
                 self._tune(base)
         self.stage_explore()
-        pool = self.results
+        pool = self._eligible(self.results)
         if self.confirm_top > 0:
             pool = self.stage_confirm() or pool  # the choice is made on the fresh runs alone
         if self.power_points:
