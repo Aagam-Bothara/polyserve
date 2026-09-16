@@ -82,6 +82,7 @@ class SubprocessTrialRunner:
         power_settle_s: float = 2.0,
         enough: Optional[Callable[[TrialMetrics], bool]] = None,
         close_call: Optional[Callable[[TrialMetrics], bool]] = None,
+        quality: Optional[object] = None,
     ):
         self.backends = backends
         self.models = models
@@ -94,6 +95,7 @@ class SubprocessTrialRunner:
         self.power_settle_s = power_settle_s
         self.enough = enough  # measure levels highest first and stop early (objectives.enough_level)
         self.close_call = close_call  # measure a level again when its tail is too close to call (close_call_level)
+        self.quality = quality  # polyserve.quality.QualityProbe: does this precision still answer the same way?
 
     def _apply_power(self, cfg: Config) -> Optional[str]:
         """Apply cfg's power setting to the GPU. Returns an error message if it cannot be applied."""
@@ -160,6 +162,9 @@ class SubprocessTrialRunner:
                 f"http://127.0.0.1:{port}", hooks, self.workload, pid=proc.pid,
                 request_timeout=self.request_timeout, enough=self.enough, close_call=self.close_call,
             )
+            if self.quality is not None and metrics.ok:
+                # The engine is up and warm: answer the quality prompts here rather than launch it again later.
+                self.quality.record(f"http://127.0.0.1:{port}", cfg.backend, cfg.quant)
             observation.measured = merge(
                 parse_log(cfg.backend, proc.tail_log(400)), metrics.peak_mem_mb, baseline_mb,
                 metrics.telemetry_source,
@@ -320,6 +325,9 @@ class StagedSearch:
     # winner: on Dolly-15k prompts on an A40, SGLang led the first trial, fell behind once vLLM got
     # the fp8 cache and a draft model, and was never tried with either.
     contender_band: float = 0.10
+    # --max-quality-loss: a polyserve.quality.QualityProbe. Stage 1 drops a precision whose greedy answers
+    # drift further from the most faithful precision's than the tolerance allows. None = quality is not gated.
+    quality: Optional[object] = None
     # Stage 5: re-measure the leader and up to confirm_top - 1 others within confirm_band of it,
     # confirm_rounds times each in turn, and choose on those runs alone (0 = off).
     confirm_top: int = 0
@@ -515,7 +523,19 @@ class StagedSearch:
         ranked = rank(ok, self.objective, self.constraints)
         # A dropped backend does not go on to the later stages either: its batch sweep would lose the same way.
         kept = [(r.result.config.backend, r.result.config.quant) for r in ranked
-                if r.result.config.backend not in dropped][: self.top_quants]
+                if r.result.config.backend not in dropped]
+        if self.quality is not None:
+            # Drop before truncating, so a precision refused on quality frees its place for the next one.
+            allowed = []
+            for key in kept:
+                why = self.quality.too_far(*key)
+                if why:
+                    self.notes.append(why)
+                else:
+                    allowed.append(key)
+            self.notes.extend(self.quality.summary())
+            kept = allowed
+        kept = kept[: self.top_quants]
         logger.info("stage 1 kept: %s", kept)
         return kept
 

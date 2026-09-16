@@ -74,6 +74,10 @@ class SearchOptions:
     confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
     all_levels: bool = False  # --all-levels: measure every concurrency level of every trial (no early stop)
     explore: bool = False  # --explore: random draws around the leader after the stages (off: see search.py)
+    # --max-quality-loss: the share of answers a cheaper precision may change before the search drops it,
+    # measured greedily on the calibration prompts against the most faithful precision that runs (quality.py).
+    # None = quality is measured separately and never gates the search, as it did before this option existed.
+    max_quality_loss: Optional[float] = None
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -99,6 +103,8 @@ class SearchOptions:
             out["levels"] = "all"
         if self.explore:
             out["explore"] = "on"
+        if self.max_quality_loss is not None:  # a quality-gated profile is not served where none was asked for
+            out["quality"] = f"{self.max_quality_loss:.3f}"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
         if objective == "balanced" and self.ttft_percentile != 50:
@@ -367,6 +373,13 @@ def calibrate(
         controller, points = power_controller, list(power_points)
     elif power_mode != "off":
         controller, points, power_notes = setup_power(hw, power_mode, power_controller)
+    probe = None
+    if opts.max_quality_loss is not None and workload.prompts:
+        from polyserve.quality import QualityProbe
+
+        # The calibration prompts themselves, answered greedily once per precision while its engine is up.
+        # Sixteen is enough to catch a precision that answers differently without adding a minute per trial.
+        probe = QualityProbe(prompts=list(workload.prompts)[:16], tolerance=opts.max_quality_loss)
     if runner is None:
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},
@@ -377,6 +390,7 @@ def calibrate(
             power=controller,
             enough=level_rule(objective, constraints, opts, points),
             close_call=close_call_level(objective, constraints),
+            quality=probe,
         )
     from polyserve.predict import Predictor
 
@@ -384,7 +398,7 @@ def calibrate(
                           predictor=Predictor(hw), models=plan.prepared, workload=workload,
                           power_points=points, variant_stages=stages, combine=opts.combine,
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
-                          feasible_fn=combination_fits(hw, reg, plan),
+                          feasible_fn=combination_fits(hw, reg, plan), quality=probe,
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
                           spec_first=True,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))

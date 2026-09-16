@@ -111,8 +111,14 @@ minutes still won by 28%. The option stays, off, with the negative result record
 
 ## Why is answer quality checked separately from calibration?
 
-Because calibration measures speed and latency, and quantization can cost accuracy that no throughput number
-shows. The separate check is deliberately narrow and its narrowness is the weak point: GSM8K only, where
+It no longer has to be. `--max-quality-loss` makes it a constraint: each precision answers the calibration
+prompts greedily while its engine is up, and one whose answers drift too far from the most faithful precision
+that runs is dropped like a configuration that cannot fit. That needs no labelled data, because it measures
+drift on the user's own prompts rather than accuracy on a benchmark — it says these weights answer differently,
+not that they answer worse.
+
+The separate, labelled check remains, because calibration measures speed and latency, and quantization can cost
+accuracy that no throughput number shows. The separate check is deliberately narrow and its narrowness is the weak point: GSM8K only, where
 quantization cost Qwen2.5-3B 2–5 points and 7B about one, and fp8 with activation quantization on Ada cost 7B
 nothing. Other tasks, other families and llama.cpp's GGUF formats are ungraded, which is why 4-bit checkpoints
 are not in `--quant auto` for larger models ([gaps](benchmarks.md#not-yet-measured)).
