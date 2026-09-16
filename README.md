@@ -50,6 +50,7 @@ Linux, Python 3.10–3.13. NVIDIA GPUs of compute capability 7.5 or newer run vL
 - [docs/benchmarks.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md): every result, at a glance and in full, with methods, ablations, quality, limits and what is still unmeasured.
 - [docs/usage.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/usage.md): how calibration works, workloads, objectives, every search option and the CLI.
 - [docs/writeup.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/writeup.md): the design of the memory planner, calibration and the predictor, what the evidence does and does not support, and the roadmap.
+- [docs/decisions.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/decisions.md): why each choice is the way it is — including why not just random search — with the measurement that settled it.
 - [benchmarks/strategies/SUMMARY.md](https://github.com/Aagam-Bothara/polyserve/blob/main/benchmarks/strategies/SUMMARY.md): every table, regenerated from the raw JSON.
 - [CONTRIBUTING.md](https://github.com/Aagam-Bothara/polyserve/blob/main/CONTRIBUTING.md): development setup, tests and adding a backend.
 
