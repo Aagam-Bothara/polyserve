@@ -117,11 +117,17 @@ minutes still won by 28%. The option stays, off, with the negative result record
 
 ## Why is answer quality checked separately from calibration?
 
-It no longer has to be. `--max-quality-loss` makes it a constraint: each precision answers the calibration
-prompts greedily while its engine is up, and one whose answers drift too far from the most faithful precision
-that runs is dropped like a configuration that cannot fit. That needs no labelled data, because it measures
-drift on the user's own prompts rather than accuracy on a benchmark — it says these weights answer differently,
-not that they answer worse.
+Because the obvious way to enforce it during tuning was built, measured, and did not work. `--quality-probe`
+answers the calibration prompts greedily at each precision while its engine is up and records how far they drift
+from the most faithful precision that runs. Making that a *constraint* — drop a precision that drifts too far —
+is what failed, and the numbers say why: identical fp8 weights answering the same prompts twice differed on 10%
+of answer openings, while 4-bit and int8 checkpoints differed on 83–100%. There is no threshold between those,
+and GSM8K put the same 4-bit weights about 2 points behind, so exact-match drift and answer quality disagree
+outright ([measurements](benchmarks.md#qwen25-14b-where-memory-binds)).
+
+So the probe reports and never refuses. It tells an operator that a precision rewrites most of its answers,
+which is worth knowing before choosing it; deciding whether those answers are *worse* needs labels, and that
+stays a separate, labelled step.
 
 Three things about it are worth stating plainly. Its first run on hardware did nothing at all: the probe was never
 built, because the guard tested prompts that a file workload only materialises later, so a 14B calibration kept a

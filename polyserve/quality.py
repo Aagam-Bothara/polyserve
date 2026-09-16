@@ -10,8 +10,12 @@ precision's doing rather than sampling noise, and the score is the share of prom
 whitespace is normalised. It says "these weights answer differently", not "these weights are worse": judging
 better or worse needs labels or a judge, which `benchmarks/task_quality.py` does separately against GSM8K.
 
-`--max-quality-loss` turns the measurement into a constraint: a precision whose answers drift further than the
-tolerance is dropped from the search the same way the planner drops a configuration that cannot fit.
+`--quality-probe on` records the measurement in the profile; it does not gate the search, and the attempt to
+make it gate is why. Measured on a 14B on an RTX 4090: identical fp8 weights answered the same prompts twice and
+differed on 10% of answer openings, while 4-bit and int8 checkpoints differed on 83-100%. There is no threshold
+between those numbers that means anything, and GSM8K put the same 4-bit weights only about 2 points behind, so
+exact-match drift and answer quality disagree outright. What the measurement is good for is telling an operator
+that a precision changes most of its answers — worth knowing before choosing it, not worth refusing it over.
 """
 
 from __future__ import annotations
@@ -95,7 +99,6 @@ class QualityProbe:
 
     prompts: List[str]
     max_tokens: int = 32  # the opening of the answer: divergence compounds over a long greedy completion
-    tolerance: float = 0.02  # --max-quality-loss: drift ABOVE the reference's own noise before a precision goes
     timeout: float = 120.0
     answers: Dict[Tuple[str, str], List[str]] = field(default_factory=dict)
     repeats: Dict[Tuple[str, str], List[str]] = field(default_factory=dict)  # a second pass, for the noise floor
@@ -150,26 +153,13 @@ class QualityProbe:
             return None
         return 1.0 - agreement(theirs, mine)
 
-    def too_far(self, backend: str, quant: str) -> Optional[str]:
-        """Why this precision should be dropped, or None to keep it.
-
-        The bar is the reference's own noise plus the tolerance. Identical weights answering the same prompts
-        twice already disagree sometimes — batched decoding is not bit-reproducible — and a gate that ignored
-        that would refuse every precision, including the reference.
-        """
-        d = self.drift(backend, quant)
-        if d is None:
-            return None
-        floor = self.noise(backend) or 0.0
-        if d <= floor + self.tolerance:
-            return None
-        ref = self.reference_for(backend)
-        return (f"{backend}/{quant} answered {d:.0%} of {len(self.prompts)} prompts differently from "
-                f"{backend}/{ref}, over the {floor + self.tolerance:.0%} allowed "
-                f"({self.tolerance:.0%} on top of the {floor:.0%} that {backend}/{ref} differs from itself)")
-
     def summary(self) -> List[str]:
-        """One note per measured precision, for the profile: what drifted, against what floor."""
+        """One note per measured precision, for the profile: what drifted, against the reference's own noise.
+
+        These are reported, never enforced. Read a drift figure next to the floor on the reference line: on a
+        14B the floor was 10% and every cheaper precision sat at 83-100%, which says the comparison saturates,
+        not that those weights are 8x worse.
+        """
         lines: List[str] = []
         for (backend, quant) in sorted(self.answers):
             d = self.drift(backend, quant)
@@ -180,5 +170,5 @@ class QualityProbe:
                              f"{len(self.prompts)} answers, greedy{floor_text}")
             else:
                 lines.append(f"quality {backend}/{quant}: {d:.0%} of answers differ from "
-                             f"{backend}/{self.reference_for(backend)} (allowed {(self.noise(backend) or 0.0) + self.tolerance:.0%})")
+                             f"{backend}/{self.reference_for(backend)}")
         return lines

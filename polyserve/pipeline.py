@@ -74,10 +74,10 @@ class SearchOptions:
     confirm: bool = True  # --confirm: re-measure the best three configurations and choose on those runs
     all_levels: bool = False  # --all-levels: measure every concurrency level of every trial (no early stop)
     explore: bool = False  # --explore: random draws around the leader after the stages (off: see search.py)
-    # --max-quality-loss: the share of answers a cheaper precision may change before the search drops it,
-    # measured greedily on the calibration prompts against the most faithful precision that runs (quality.py).
-    # None = quality is measured separately and never gates the search, as it did before this option existed.
-    max_quality_loss: Optional[float] = None
+    # --quality-probe: measure how far each precision's answers drift from the most faithful precision that
+    # runs, and record it in the profile (quality.py). It does not gate the search: the comparison saturates,
+    # so there is no threshold worth enforcing. Off by default because it costs two short passes per precision.
+    quality_probe: bool = False
 
     def key(self, objective: Optional[str] = None) -> Dict[str, str]:
         """Options that change the pick, recorded in the profile and in its cache path: the non-default
@@ -103,8 +103,8 @@ class SearchOptions:
             out["levels"] = "all"
         if self.explore:
             out["explore"] = "on"
-        if self.max_quality_loss is not None:  # a quality-gated profile is not served where none was asked for
-            out["quality"] = f"{self.max_quality_loss:.3f}"
+        if self.quality_probe:  # the probe costs trials' time, so a probed profile is cached under its own name
+            out["quality"] = "on"
         if self.budget_s is not None:  # a budgeted profile is never served where a full one was asked for
             out["budget"] = f"{int(self.budget_s)}s"
         if objective == "balanced" and self.ttft_percentile != 50:
@@ -235,7 +235,7 @@ def select(
 
 
 def quality_probe_for(opts, workload):
-    """The quality probe for a calibration, or None when `--max-quality-loss` was not asked for.
+    """The quality probe for a calibration, or None when `--quality-probe` was not asked for.
 
     Prompts come from a copy of the workload. File and real-text workloads carry none until the measurement
     path materialises them per concurrency level (calibrate/workload.py), and asking the original for them
@@ -244,7 +244,7 @@ def quality_probe_for(opts, workload):
     its first hardware run: a 14B calibration kept a 4-bit checkpoint no one had compared against anything.
     A probe that cannot be built now says so rather than disabling itself quietly.
     """
-    if opts.max_quality_loss is None:
+    if not opts.quality_probe:
         return None
     import logging
     from dataclasses import replace
@@ -269,10 +269,10 @@ def quality_probe_for(opts, workload):
     prompts = prompts[:wanted]
     if not prompts:
         logging.getLogger(__name__).warning(
-            "--max-quality-loss %.3f was asked for, but workload %s produced no prompts to compare answers on; "
-            "quality will not gate this search", opts.max_quality_loss, workload.name)
+            "--quality-probe was asked for, but workload %s produced no prompts to compare answers on; "
+            "no drift will be measured", workload.name)
         return None
-    return QualityProbe(prompts=prompts, tolerance=opts.max_quality_loss)
+    return QualityProbe(prompts=prompts)
 
 
 def prepare_and_plan(

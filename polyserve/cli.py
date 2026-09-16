@@ -277,14 +277,14 @@ def _percentile(value: int) -> int:
 
 def _opts(quant: str, kv_quant: str, speculative: str, prefix_cache: str, combine: str = "on",
           budget: Optional[float] = None, ttft_percentile: int = 95, confirm: str = "on", all_levels: bool = False,
-          explore: str = "off", max_quality_loss: Optional[float] = None):
+          explore: str = "off", quality_probe: str = "off"):
     from polyserve.pipeline import SearchOptions
 
     return SearchOptions(
         quants=None if quant == "auto" else [q.strip() for q in quant.split(",") if q.strip()],
         kv_quant=kv_quant == "on", speculative=speculative == "on", prefix_cache=prefix_cache == "on",
         combine=combine == "on", budget_s=budget, ttft_percentile=ttft_percentile, confirm=confirm == "on",
-        all_levels=all_levels, explore=explore == "on", max_quality_loss=max_quality_loss,
+        all_levels=all_levels, explore=explore == "on", quality_probe=quality_probe == "on",
     )
 
 
@@ -299,10 +299,12 @@ SPEC_OPT = typer.Option("on", "--speculative", callback=_on_off,
                         help="Try speculative decoding (n-gram prompt lookup, a small draft model)")
 PREFIX_OPT = typer.Option("on", "--prefix-cache", callback=_on_off,
                           help="Keep prefix caching on and tune it for workloads whose prompts share a prefix")
-QUALITY_OPT = typer.Option(None, "--max-quality-loss", min=0.0, max=1.0,
-                           help="Drop a weight precision whose answers drift further than this from the most "
-                                "faithful precision that runs, measured greedily on your own calibration prompts "
-                                "(0.02 = 2% of answers may differ). Unset: quality never gates the search.")
+QUALITY_OPT = typer.Option("off", "--quality-probe", callback=_on_off,
+                           help="Measure how far each weight precision's answers drift from the most faithful "
+                                "precision that runs, on your own calibration prompts, and record it in the "
+                                "profile. It refuses nothing: the comparison saturates (identical weights "
+                                "differ from themselves on ~10% of answer openings, cheaper ones on 83-100%). "
+                                "Costs two short generation passes per precision.")
 LAYOUT_OPT = typer.Option("single", "--layout", callback=_layout,
                           help="Multi-GPU layout: single (default), replicas (one engine per GPU behind a load "
                                "balancer), tp (tensor parallel), auto (measure both, keep the better)")
@@ -459,7 +461,7 @@ def bench(
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
-    max_quality_loss: Optional[float] = QUALITY_OPT,
+    quality_probe: str = QUALITY_OPT,
 ) -> None:
     """Run calibration and print the table; do not serve."""
     from polyserve import cache as profile_cache
@@ -473,7 +475,7 @@ def bench(
     if not candidates:
         err.print("[red]no candidate backends for this machine/model[/]")
         raise typer.Exit(2)
-    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, max_quality_loss)
+    opts = _opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe)
     result = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl, quants=opts.quants)
     err.print(f"{len(result.all_feasible)}/{result.total_considered} configs feasible; "
               f"calibrating for {objective} on workload {wl.name}")
@@ -523,7 +525,7 @@ def recalibrate(
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
-    max_quality_loss: Optional[float] = QUALITY_OPT,
+    quality_probe: str = QUALITY_OPT,
 ) -> None:
     """Force a calibration rerun and overwrite the cached profile."""
     from polyserve.pipeline import resolve_profile
@@ -535,7 +537,7 @@ def recalibrate(
                               workload=wl, constraints=cons,
                               progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, max_quality_loss), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe), layout=layout)
     view.stop()
     console.print(_trial_table(profile.calibration_table, winner=_winner_key(profile)))
     _print_profile(profile)
@@ -575,7 +577,7 @@ def compare(
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
-    max_quality_loss: Optional[float] = QUALITY_OPT,
+    quality_probe: str = QUALITY_OPT,
 ) -> None:
     """Measure PolyServe's pick vs stock defaults (and Ollama) on one workload; write a results JSON."""
     from polyserve.bench import compare as _compare, to_markdown
@@ -593,12 +595,12 @@ def compare(
     profile = resolve_profile(spec, objective, force_backend=backend, workload=wl, constraints=cons,
                               progress=view.progress, hw=hw, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, max_quality_loss), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe), layout=layout)
     view.stop()
     _print_profile(profile)
     candidates, reg = select(hw, spec, force=backend)
     planned = prepare_and_plan(hw, spec, candidates, reg, materialize=True, workload=wl,
-                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, max_quality_loss).quants)
+                               quants=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe).quants)
 
     def _row_progress(label: str, row) -> None:
         if row is None:
@@ -799,7 +801,7 @@ def serve(
     all_levels: bool = ALL_LEVELS_OPT,
     explore: str = EXPLORE_OPT,
     budget: Optional[str] = BUDGET_OPT,
-    max_quality_loss: Optional[float] = QUALITY_OPT,
+    quality_probe: str = QUALITY_OPT,
 ) -> None:
     """Discover hardware, calibrate once (cached), then serve an OpenAI-compatible API."""
     import uvicorn
@@ -817,7 +819,7 @@ def serve(
                               workload=wl, constraints=cons,
                               progress=view.progress, on_stage=view.on_stage,
                               power_mode=power, phases=phases, kv_connector=kv_connector,
-                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, max_quality_loss), layout=layout)
+                              options=_opts(quant, kv_quant, speculative, prefix_cache, combine, budget, ttft_percentile, confirm, all_levels, explore, quality_probe), layout=layout)
     view.stop()
     _print_profile(profile)
     if profile.prepared is None:

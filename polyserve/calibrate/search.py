@@ -325,11 +325,13 @@ class StagedSearch:
     # winner: on Dolly-15k prompts on an A40, SGLang led the first trial, fell behind once vLLM got
     # the fp8 cache and a draft model, and was never tried with either.
     contender_band: float = 0.10
-    # --max-quality-loss: a polyserve.quality.QualityProbe. Stage 1 drops a precision whose greedy answers
-    # drift further from the most faithful precision's than the tolerance allows. None = quality is not gated.
+    # --quality-probe: a polyserve.quality.QualityProbe. Stage 1 records how far each precision's answers drift
+    # from the most faithful one that runs; it refuses nothing, because the comparison saturates.
     quality: Optional[object] = None
-    # (backend, quant) pairs the gate refused. Their trials stay in the table, because the profile should show
-    # what they measured, but `_eligible` keeps them out of every choice of leader or winner.
+    # (backend, quant) pairs that may not be chosen. Nothing populates this today — drift gating was withdrawn —
+    # but the invariant it enforces was learned the hard way: dropping a precision from stage 1's `kept` only
+    # stops it being tuned, and the winner is the argmax over every successful trial, so a refused precision
+    # whose baseline was fastest got served anyway. Any future gate must add to this, not just to `kept`.
     refused: set = field(default_factory=set)
     # Stage 5: re-measure the leader and up to confirm_top - 1 others within confirm_band of it,
     # confirm_rounds times each in turn, and choose on those runs alone (0 = off).
@@ -540,17 +542,10 @@ class StagedSearch:
         kept = [(r.result.config.backend, r.result.config.quant) for r in ranked
                 if r.result.config.backend not in dropped]
         if self.quality is not None:
-            # Drop before truncating, so a precision refused on quality frees its place for the next one.
-            allowed = []
-            for key in kept:
-                why = self.quality.too_far(*key)
-                if why:
-                    self.notes.append(why)
-                    self.refused.add(key)  # not tuned further, and not eligible to win either
-                else:
-                    allowed.append(key)
+            # Recorded, not enforced. Gating on this drift was tried and withdrawn: identical weights differ
+            # from themselves on 10% of answer openings while cheaper precisions differ on 83-100%, so no
+            # threshold separates them, and GSM8K put those same weights ~2 points back (quality.py).
             self.notes.extend(self.quality.summary())
-            kept = allowed
         kept = kept[: self.top_quants]
         logger.info("stage 1 kept: %s", kept)
         return kept
