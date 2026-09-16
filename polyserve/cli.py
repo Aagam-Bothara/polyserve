@@ -842,7 +842,10 @@ def serve(
                          power=_power_controller(profile))
         err.print(f"[dim]starting {profile.backend} ...[/]")
         sup.start()
-        app_ = create_app(sup.base_url, profile=profile, status_fn=sup.status)
+        from polyserve.drift import TrafficWatch
+
+        app_ = create_app(sup.base_url, profile=profile, status_fn=sup.status,
+                          watch=TrafficWatch(profile.workload_spec))
         upstream = sup.base_url
 
     def _shutdown(*_: object) -> None:

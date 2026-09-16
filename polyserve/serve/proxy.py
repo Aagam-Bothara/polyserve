@@ -34,6 +34,7 @@ def create_app(
     profile: Optional[Profile] = None,
     status_fn=None,
     request_timeout: Optional[float] = None,
+    watch=None,
 ) -> FastAPI:
     state: Dict[str, Any] = {"client": None}
 
@@ -81,6 +82,13 @@ def create_app(
             data["runtime"] = status_fn()
         return JSONResponse(data)
 
+    @app.get("/polyserve/drift")
+    async def drift() -> JSONResponse:
+        """Whether live traffic still looks like the workload this profile was calibrated on."""
+        if watch is None:
+            return JSONResponse({"error": "no traffic watch (serving without a profile)"}, status_code=404)
+        return JSONResponse(watch.report())
+
     @app.api_route("/v1/{path:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
     async def passthrough(path: str, request: Request) -> Response:
         client: httpx.AsyncClient = state["client"]
@@ -93,23 +101,40 @@ def create_app(
             headers=headers,
             params=request.query_params,
         )
+        if watch is not None:
+            watch.began()
         try:
             upstream = await client.send(upstream_req, stream=True)
         except httpx.HTTPError as exc:
             logger.warning("upstream error: %s", exc)
+            if watch is not None:
+                watch.ended()
             return JSONResponse({"error": {"message": f"backend unavailable: {exc}", "type": "upstream_error"}},
                                 status_code=502)
         media = upstream.headers.get("content-type", "")
         if "text/event-stream" in media:
+            # Streamed bytes are never parsed, so a streamed reply counts as a request and toward concurrency,
+            # but carries no token counts; the request is only over once the client has drained it.
+            async def _finish_stream() -> None:
+                await upstream.aclose()
+                if watch is not None:
+                    watch.ended()
+
             return StreamingResponse(
                 upstream.aiter_raw(),
                 status_code=upstream.status_code,
                 headers=_filtered(upstream.headers),
                 media_type="text/event-stream",
-                background=BackgroundTask(upstream.aclose),
+                background=BackgroundTask(_finish_stream),
             )
         content = await upstream.aread()
         await upstream.aclose()
+        if watch is not None:
+            watch.record_response(content, media)
+            watch.ended()
+            if watch.should_warn():
+                logger.warning("traffic no longer looks like the calibrated workload: %s; "
+                               "`polyserve recalibrate` would re-tune for it", "; ".join(watch.findings()))
         return Response(content=content, status_code=upstream.status_code, headers=_filtered(upstream.headers))
 
     return app
