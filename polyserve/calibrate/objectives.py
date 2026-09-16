@@ -155,8 +155,14 @@ def enough_level(objective: str, cons: Optional[Constraints] = None) -> Optional
 def close_call_level(objective: str, cons: Optional[Constraints] = None,
                      confidence: float = 0.95) -> Optional[Callable[[TrialMetrics], bool]]:
     """Whether a level's tail is too close to its ceiling to judge from its own requests: the ceiling lies inside
-    the confidence interval of the percentile it applies to (calibrate/tail.py). Such a level is measured again.
-    Only `balanced` judges a tail against a ceiling, so the rest get None."""
+    the interval of the percentile it applies to (calibrate/tail.py). Such a level is measured again.
+    Only `balanced` judges a tail against a ceiling, so the rest get None.
+
+    This is a screen, not a guarantee. It uses the widest interval the order statistics can express, whose real
+    confidence is `attained_confidence(n, q)` — about 81% for a p95 from 32 requests, because the slowest of 32
+    samples exceeds the true p95 only 80.6% of the time. Demanding a true 95% upper bound would take 59 requests
+    per level (72 for a two-sided interval), so a level that passes this screen has not been certified at 95%.
+    """
     if objective != "balanced":
         return None
     cons = cons or Constraints()
@@ -165,7 +171,7 @@ def close_call_level(objective: str, cons: Optional[Constraints] = None,
     def close(m: TrialMetrics) -> bool:
         if not m.ok or not m.ttft_samples_ms:
             return False
-        low, high = quantile_interval(m.ttft_samples_ms, q, confidence)
+        low, high = quantile_interval(m.ttft_samples_ms, q, confidence, unbounded=False)
         return low <= cons.ttft_ceiling_ms <= high
 
     return close

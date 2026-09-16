@@ -8,7 +8,7 @@ import math
 import polyserve.calibrate.measure as M
 from polyserve.backends.base import LlmtraceHooks
 from polyserve.calibrate.objectives import Constraints, close_call_level
-from polyserve.calibrate.tail import quantile_interval
+from polyserve.calibrate.tail import attained_confidence, quantile_interval, samples_needed
 from polyserve.calibrate.tokens import TokenCounter
 from polyserve.calibrate.workload import Workload
 from polyserve.models import TrialMetrics
@@ -16,12 +16,29 @@ from polyserve.models import TrialMetrics
 
 def test_the_interval_brackets_the_sample_percentile_and_narrows_with_more_samples():
     small = [float(i) for i in range(1, 33)]  # 32 requests, as at 8 users
-    lo, hi = quantile_interval(small, 0.95)
-    assert lo <= small[round(0.95 * 31)] <= hi and hi == 32.0  # with 32 samples the top is the slowest request
+    lo, hi = quantile_interval(small, 0.95, unbounded=False)
+    assert lo <= small[round(0.95 * 31)] <= hi and hi == 32.0  # clamped: the top is the slowest request
     big = [float(i) for i in range(1, 641)]
     blo, bhi = quantile_interval(big, 0.95)
     assert blo <= 608 <= bhi and (bhi - blo) / 640 < (hi - lo) / 32  # narrower relative to the sample
     assert all(math.isnan(v) for v in quantile_interval([], 0.95))
+
+
+def test_32_requests_cannot_bound_a_p95_at_95_percent():
+    """The slowest of 32 samples exceeds the true p95 only 80.6% of the time, so it is not a 95% upper bound."""
+    small = [float(i) for i in range(1, 33)]
+    lo, hi = quantile_interval(small, 0.95)  # unbounded by default: say so rather than clamp
+    assert hi == math.inf and lo <= 32.0
+    assert round(attained_confidence(32, 0.95), 3) == 0.806
+    assert samples_needed(0.95, 0.95, two_sided=True) == 72
+    assert samples_needed(0.95, 0.95, two_sided=False) == 59
+
+
+def test_enough_samples_give_a_finite_95_percent_upper_bound():
+    plenty = [float(i) for i in range(1, 73)]  # 72 samples: the two-sided interval closes
+    lo, hi = quantile_interval(plenty, 0.95)
+    assert math.isfinite(lo) and math.isfinite(hi) and lo <= plenty[round(0.95 * 71)] <= hi
+    assert attained_confidence(72, 0.95) >= 0.95
 
 
 def _metrics(ttfts_ms) -> TrialMetrics:
