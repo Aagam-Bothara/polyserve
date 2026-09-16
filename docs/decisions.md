@@ -21,11 +21,17 @@ pick; every strategy tried at least once, so the profile says what each setting 
 a winner; and a sensible order under `--budget`, where the first handful of trials decide everything.
 
 The case where staging should win outright is a space where good configurations are rare, rather than the roughly
-one in four that carry speculative decoding on those cards — and that case has since been measured. On a 14B in
-fp8 on a 24 GB card, where only 2 of 54 configurations fit and stock vLLM cannot start at all, the staged search
-measured 385 tok/s against random sampling's 369 at equal time, three runs each with the ranges apart
-([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). One card and one seed, so it is a first data point
-rather than a law — but the prediction held exactly where it was supposed to.
+one in four that carry speculative decoding on those cards — and that case has since been measured twice, with
+two different answers. On a 14B in fp8 on a 24 GB card, where only 2 of 54 configurations fit, the staged search
+measured 385 tok/s against random sampling's 369 at equal time, ranges apart. On the same card in the
+788-configuration space that also contains 4-bit checkpoints, the two tied: 1412 against 1416, with random search
+given 2524 s to the staged search's 3028 s and sampling 3% of the space
+([evidence](benchmarks.md#qwen25-14b-where-memory-binds)).
+
+So the honest score is one win in a small space and one tie in a large one, and the prediction held in only half
+the cases it was made for. Nothing here supports "the search order is what pays"; what it supports is the
+narrower claim these stages were built for — the same answer every run, every strategy tried at least once, and
+a profile that says what each setting was worth.
 
 ## Why measure at all, instead of a rule of thumb?
 
@@ -117,6 +123,13 @@ that runs is dropped like a configuration that cannot fit. That needs no labelle
 drift on the user's own prompts rather than accuracy on a benchmark — it says these weights answer differently,
 not that they answer worse.
 
+Two things about it are worth stating plainly. Its first run on hardware did nothing at all: the probe was never
+built, because the guard tested prompts that a file workload only materialises later, so a 14B calibration kept a
+4-bit checkpoint that had been compared against nothing (fixed, with a regression test). And even working, it is
+not an accuracy guarantee — sixteen instruction-following prompts can agree perfectly while multi-step arithmetic
+degrades, which is exactly what happened on that card: zero drift would have been reported where GSM8K lost about
+2 points ([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). Labelled grading stays a separate step.
+
 The separate, labelled check remains, because calibration measures speed and latency, and quantization can cost
 accuracy that no throughput number shows. The separate check is deliberately narrow and its narrowness is the weak point: GSM8K only, where
 quantization cost Qwen2.5-3B 2–5 points and 7B about one, and fp8 with activation quantization on Ada cost 7B
@@ -133,9 +146,10 @@ sampling visibly degrades, which is the same missing experiment named above
 
 ## What would change these answers?
 
-- Long-context traffic at high concurrency, where batch and cache sizing decide the result. The other half of
-  this gap is now closed: on a 14B in fp8 on 24 GB, where good configurations are rare, the staged search beat
-  random sampling by 4.4% ([details](benchmarks.md#qwen25-14b-where-memory-binds)).
+- Long-context traffic at high concurrency, where batch and cache sizing decide the result. The memory-bound
+  half of this gap has now been measured twice on a 14B at 24 GB, and split: the staged search won by 4.4% in a
+  104-configuration space and tied in a 788-configuration one
+  ([details](benchmarks.md#qwen25-14b-where-memory-binds)). A third measurement would say which is typical.
 - Traffic that drifts after calibration: profiles are cached per machine, model, objective and workload, and
   nothing re-tunes when the prompts change shape.
 - A second person running a calibration on hardware and traffic the author does not control.

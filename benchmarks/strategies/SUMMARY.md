@@ -9,6 +9,7 @@
 | A40 | Qwen2.5-3B-Instruct | rag-shared | `vllm/awq/ctx32768/b64/gmu0.95` | 480 | 409 ms | 334 (+44%) | 378 (+27%) | failed | - |
 | A40 | Qwen2.5-7B-Instruct | chat | `vllm/gptq/ctx8192/b256/gmu0.95` | 495 | 475 ms | 233 (+113%) | 203 (+144%) | 96 (+413%) | - |
 | GeForce RTX 4090 | Qwen2.5-14B-Instruct | file-dolly-heldout-fc5b6407 | `vllm/fp8/ctx4096/b16/gmu0.90/pb16384/kvfp8/sd=suffix:24` | 385 | 48 ms | failed | - | - | - |
+| GeForce RTX 4090 | Qwen2.5-14B-Instruct | file-dolly-heldout-fc5b6407 | `vllm/gptq/ctx8192/b16/gmu0.95/kvfp8/sd=suffix:24` | 1412 | 40 ms | failed | - | - | - |
 | CPU | Qwen2.5-0.5B-Instruct | default | `llamacpp-cpu/Q4_K_M/ctx8192/b1/ngl0/nb2048/sd=ngram:64` | 92 | 475 ms | - | - | 68 (+37%) | - |
 | A40 | Qwen2.5-3B-Instruct | rag | `vllm/bf16/ctx32768/b64/gmu0.95` | 106 | 1288 ms | 105 (+1%) | 45 (+134%) | - | - |
 | A40 | Qwen2.5-3B-Instruct | file-dolly-d03d5896 | `vllm/bf16/ctx16384/b64/gmu0.95/kvfp8_e5m2/sd=draft:Qwen/Qwen2.5-0.5B-Instruct:4` | 547 | 120 ms | 496 (+10%) | - | - | 473 (+16%) |
