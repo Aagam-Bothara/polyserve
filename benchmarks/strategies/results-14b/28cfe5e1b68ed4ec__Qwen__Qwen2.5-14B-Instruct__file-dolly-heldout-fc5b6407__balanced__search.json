@@ -1,0 +1,19 @@
+{
+ "model": "Qwen/Qwen2.5-14B-Instruct",
+ "workload": "file-dolly-d03d5896",
+ "eval_workload": "file-dolly-heldout-fc5b6407",
+ "space": 104,
+ "budget_s": 2508.8112582729664,
+ "polyserve": "vllm/fp8/ctx4096/b16/gmu0.90/pb16384/kvfp8/sd=suffix:24",
+ "polyserve_trials": 28,
+ "searches": [
+  {
+   "seed": 0,
+   "trials": 44,
+   "seconds": 2489.0869593929965,
+   "untried": 60,
+   "pick": "vllm/fp8/ctx4096/b16/gmu0.90/sd=suffix:24"
+  }
+ ],
+ "rule_of_thumb": "vllm/fp8/ctx4096/b16/gmu0.90/kvfp8"
+}

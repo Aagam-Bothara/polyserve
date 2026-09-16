@@ -18,9 +18,14 @@ minus the stage order, and it inherits the expensive parts — the planner, the 
 
 The stages buy three things random draws do not: the same answer on every run, where a seed change moves random's
 pick; every strategy tried at least once, so the profile says what each setting was worth instead of only naming
-a winner; and a sensible order under `--budget`, where the first handful of trials decide everything. The case
-where staging should win outright — a space where good configurations are rare, rather than the roughly one in
-four that carry speculative decoding here — has not been measured.
+a winner; and a sensible order under `--budget`, where the first handful of trials decide everything.
+
+The case where staging should win outright is a space where good configurations are rare, rather than the roughly
+one in four that carry speculative decoding on those cards — and that case has since been measured. On a 14B in
+fp8 on a 24 GB card, where only 2 of 54 configurations fit and stock vLLM cannot start at all, the staged search
+measured 385 tok/s against random sampling's 369 at equal time, three runs each with the ranges apart
+([evidence](benchmarks.md#qwen25-14b-where-memory-binds)). One card and one seed, so it is a first data point
+rather than a law — but the prediction held exactly where it was supposed to.
 
 ## Why measure at all, instead of a rule of thumb?
 
@@ -122,8 +127,9 @@ sampling visibly degrades, which is the same missing experiment named above
 
 ## What would change these answers?
 
-- A model where memory truly binds (a 14B in fp8 on 24 GB, or long-context traffic at high concurrency), where
-  batch and cache sizing decide the result and good configurations are rare.
+- Long-context traffic at high concurrency, where batch and cache sizing decide the result. The other half of
+  this gap is now closed: on a 14B in fp8 on 24 GB, where good configurations are rare, the staged search beat
+  random sampling by 4.4% ([details](benchmarks.md#qwen25-14b-where-memory-binds)).
 - Traffic that drifts after calibration: profiles are cached per machine, model, objective and workload, and
   nothing re-tunes when the prompts change shape.
 - A second person running a calibration on hardware and traffic the author does not control.
