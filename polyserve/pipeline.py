@@ -234,6 +234,33 @@ def select(
     return select_backends(hw, spec, reg, force=force), reg
 
 
+def quality_probe_for(opts, workload):
+    """The quality probe for a calibration, or None when `--max-quality-loss` was not asked for.
+
+    Prompts come from a copy of the workload. File and real-text workloads carry none until the measurement
+    path materialises them per concurrency level (calibrate/workload.py), and asking the original for them
+    would change what the first level measures. The first version of this guard tested `workload.prompts`
+    directly, which is empty here for exactly the workloads a user gates, so the gate silently did nothing on
+    its first hardware run: a 14B calibration kept a 4-bit checkpoint no one had compared against anything.
+    A probe that cannot be built now says so rather than disabling itself quietly.
+    """
+    if opts.max_quality_loss is None:
+        return None
+    import logging
+    from dataclasses import replace
+
+    from polyserve.quality import QualityProbe
+
+    # Sixteen prompts catch a precision that answers differently without adding a minute per trial.
+    prompts = list(replace(workload, prompts=[], fitted=False).ensure_prompts().prompts)[:16]
+    if not prompts:
+        logging.getLogger(__name__).warning(
+            "--max-quality-loss %.3f was asked for, but workload %s produced no prompts to compare answers on; "
+            "quality will not gate this search", opts.max_quality_loss, workload.name)
+        return None
+    return QualityProbe(prompts=prompts, tolerance=opts.max_quality_loss)
+
+
 def prepare_and_plan(
     hw: HardwareDescriptor,
     spec: ModelSpec,
@@ -373,13 +400,7 @@ def calibrate(
         controller, points = power_controller, list(power_points)
     elif power_mode != "off":
         controller, points, power_notes = setup_power(hw, power_mode, power_controller)
-    probe = None
-    if opts.max_quality_loss is not None and workload.prompts:
-        from polyserve.quality import QualityProbe
-
-        # The calibration prompts themselves, answered greedily once per precision while its engine is up.
-        # Sixteen is enough to catch a precision that answers differently without adding a minute per trial.
-        probe = QualityProbe(prompts=list(workload.prompts)[:16], tolerance=opts.max_quality_loss)
+    probe = quality_probe_for(opts, workload)
     if runner is None:
         runner = SubprocessTrialRunner(
             backends={n: reg[n] for n in plan.candidates},

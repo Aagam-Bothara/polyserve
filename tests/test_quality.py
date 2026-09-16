@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from polyserve.calibrate.search import StagedSearch
+from polyserve.calibrate.workload import get_workload, workload_from_file
 from polyserve.models import Config, TrialMetrics, TrialResult
+from polyserve.pipeline import SearchOptions, quality_probe_for
 from polyserve.quality import QualityProbe, agreement, precision_rank
 
 FEASIBLE = [Config(backend="vllm", quant=q, ctx=4096, batch=b, gpu_memory_utilization=0.9)
@@ -63,6 +67,25 @@ def test_stage_one_drops_the_drifting_precision_even_though_it_is_faster():
 def test_without_a_probe_the_faster_precision_is_kept():
     search = StagedSearch(objective="throughput", runner=FakeRunner())
     assert search.stage_quant(FEASIBLE)[0] == ("vllm", "awq")
+
+
+def test_a_file_workload_still_gets_a_probe(tmp_path):
+    """Regression: a file workload carries no prompts until measurement materialises them per level, so a guard
+    on `workload.prompts` disabled the gate on exactly the workloads a user would gate. It shipped inert."""
+    f = tmp_path / "prompts.jsonl"
+    f.write_text("\n".join(json.dumps({"prompt": f"question {i} about something"}) for i in range(60)),
+                 encoding="utf-8")
+    wl = workload_from_file(f, template=get_workload("chat"))
+    assert wl.prompts == []  # the condition that broke it
+
+    probe = quality_probe_for(SearchOptions(max_quality_loss=0.02), wl)
+
+    assert probe is not None and len(probe.prompts) == 16 and probe.tolerance == 0.02
+    assert wl.prompts == []  # the workload the trials measure is left untouched
+
+
+def test_no_probe_when_the_gate_was_not_asked_for():
+    assert quality_probe_for(SearchOptions(), get_workload("chat")) is None
 
 
 def test_a_probe_records_each_precision_once():
