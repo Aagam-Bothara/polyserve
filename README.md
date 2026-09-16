@@ -2,15 +2,22 @@
 
 [![tests](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml/badge.svg)](https://github.com/Aagam-Bothara/polyserve/actions/workflows/tests.yml)
 
-**PolyServe is an autotuner for LLM serving: it finds the fastest configuration for your GPU and your traffic, then serves it.** Give it a model and, ideally, a sample of your prompts. It knows which settings each engine offers on each card (vLLM, SGLang and llama.cpp; weight precision, batch size, KV-cache type, speculative decoding and more), drops every configuration that will not fit in memory, measures the rest on your prompts, and serves the fastest one that meets your latency target behind an OpenAI-compatible API. The winning settings changed from card to card and from one set of prompts to another, so PolyServe's pick beat a fixed rule of thumb (fp8 weights and KV cache, a short context, batch 256) by 15–97% on the three cards where both ran. Random sampling of the same settings, given the same time, matched its search on two of those cards and beat it on the third, until the search was changed to try speculative decoding before the settings that pay only with it: on that card it then found random search's best configuration in 43 minutes where random search had used 66, and on the other two cards it kept the tie while calibrating a third faster. Calibration measures speed and latency; what quantization costs in answer quality is checked separately.
+**PolyServe finds the fastest way to serve an LLM on your GPU and your traffic, then serves it behind an OpenAI-compatible API.** It measures real configurations — engine, weight precision, batch size, KV-cache type, speculative decoding — instead of guessing, because the settings that won changed on every card tried.
+
+| Llama 3.1 8B, held-out prompts | PolyServe | an expert's rule of thumb † | stock default |
+|---|---|---|---|
+| RTX 4090 | **1041 tok/s** | 667 (+56%) | SGLang 448 (+132%) |
+| A100 | **1155 tok/s** | 674 (+71%) | vLLM 726 (+59%) |
+| A40 | **506 tok/s** | 257 (+97%) | vLLM 262 (+93%) |
+
+† fp8 weights and KV cache, a short context, batch 256: what an informed user sets without measuring. On both Ampere cards it was **slower than changing nothing**, because an fp8 KV cache costs throughput there. Percentages are PolyServe's lead; each row was measured on prompts held out of calibration, in the sessions detailed in [benchmarks](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md#llama-31-8b-on-four-gpus).
 
 ## Results
 
-Measured on rented GPUs against stock `vllm serve` and SGLang defaults:
-
-- **The pick holds on prompts it never saw.** Llama 3.1 8B, calibrated on 300 Dolly-15k prompts and measured on 300 others: **+93%** on an A40, **+59%** on an A100, **+71%** on an RTX 4090 over stock SGLang (stock vLLM does not start there), and **+24%** on an H100 over stock vLLM with fp8 weights.
-- **Your traffic decides what pays.** On one A40 with Qwen2.5-3B the pick changed with the prompts: suffix decoding on Dolly prompts (**+122%** on held-out prompts), a draft model on news-article extraction (+66.5%), an fp8 KV cache on real chat (+10%).
-- **Calibration pays for itself within hours.** It took 22–56 minutes per model and workload, repaid by 0.5–2.6 hours of busy serving on held-out prompts. Measuring the busiest load first skips 29–45% of that time without changing a pick.
+- **Your traffic decides what pays, not the card alone.** On one A40 with Qwen2.5-3B the winning setting changed with the prompts: suffix decoding on Dolly prompts (+122% over stock), a draft model on news-article extraction (+66.5%), an fp8 KV cache on real chat (+10%). A tuner that ignores your prompts cannot find these.
+- **The pick holds on prompts it never saw.** Every number here was measured on prompts held out of calibration: 300 Dolly-15k prompts to tune on, 300 others to score on. An H100 not in the table gained +24% over stock vLLM with fp8 weights.
+- **Calibration pays for itself within hours.** 22–56 minutes per model and workload, repaid by 0.5–2.6 hours of busy serving. Measuring the busiest load first cuts 29–45% off that without changing a pick.
+- **What the search order is worth: nothing yet.** Given the same time, random sampling of the same space matches this staged search on these cards. Staging buys the same answer every run, every strategy tried at least once, and a profile that says what each setting was worth — the gains above come from measuring, not from the search order ([the evidence](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md#llama-31-8b-on-four-gpus)).
 
 Every result, with methods, ablations, quality checks and limits: [docs/benchmarks.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md).
 
