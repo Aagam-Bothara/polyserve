@@ -321,7 +321,16 @@ def test_a_gated_model_says_how_to_get_in(monkeypatch):
 
 
 def test_draft_models_share_the_family_tokenizer():
-    assert S.draft_for("Qwen/Qwen2.5-7B-Instruct") == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert S.draft_for("Qwen/Qwen2.5-3B-Instruct") == "Qwen/Qwen2.5-0.5B-Instruct"
+    assert S.draft_for("Qwen/Qwen2.5-Coder-3B-Instruct") == "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+    # Qwen2.5 carries 152064 tokens from 7B up and 151936 below, and vLLM refuses a draft whose vocabulary
+    # differs, so the larger targets get none: offering one on a 14B produced a launch that always failed.
+    assert S.draft_for("Qwen/Qwen2.5-7B-Instruct") is None
+    assert S.draft_for("Qwen/Qwen2.5-14B-Instruct") is None
+    assert S.draft_for("Qwen/Qwen2.5-72B-Instruct") is None
+    assert S.draft_for("Qwen/Qwen2.5-Coder-14B-Instruct") is None
+    # Qwen3 keeps one vocabulary from 0.6B through 32B, so every size there can draft.
+    assert S.draft_for("Qwen/Qwen3-14B") == "Qwen/Qwen3-0.6B"
     assert S.draft_for("meta-llama/Llama-3.2-3B-Instruct") == "meta-llama/Llama-3.2-1B-Instruct"
     assert S.draft_for("meta-llama/Llama-3.1-8B-Instruct") == "meta-llama/Llama-3.2-1B-Instruct"
     # an ungated copy drafts with an ungated copy, so neither needs a Hub token

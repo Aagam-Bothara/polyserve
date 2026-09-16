@@ -27,8 +27,14 @@ from typing import Dict, Optional, Tuple
 # (target pattern, draft model). The draft must share the target's tokenizer. Llama drafts come from the target's
 # own organisation, so unsloth's ungated copies of Meta's gated models draft with an ungated model too.
 DRAFTS = [
-    (r"^Qwen/Qwen2\.5-(?:1\.5|3|7|14|32|72)B-Instruct$", "Qwen/Qwen2.5-0.5B-Instruct"),
-    (r"^Qwen/Qwen2\.5-Coder-(?:1\.5|3|7|14|32)B-Instruct$", "Qwen/Qwen2.5-Coder-0.5B-Instruct"),
+    # Qwen2.5 splits its vocabulary by size: 0.5B, 1.5B and 3B carry 151936 tokens, 7B and larger 152064 (read
+    # from each config.json). vLLM refuses a draft whose vocabulary differs from the target's, so the small draft
+    # serves only the small targets. Offering it for 14B produced a configuration that could never launch:
+    # "Target and draft model should have the same vocabulary size. Target model vocab_size=152064. Draft model
+    # vocab_size=151936" (Qwen2.5-14B-Instruct on an RTX 4090, 2026-09-16). Qwen2.5-Coder splits the same way.
+    (r"^Qwen/Qwen2\.5-(?:1\.5|3)B-Instruct$", "Qwen/Qwen2.5-0.5B-Instruct"),
+    (r"^Qwen/Qwen2\.5-Coder-(?:1\.5|3)B-Instruct$", "Qwen/Qwen2.5-Coder-0.5B-Instruct"),
+    # Qwen3 keeps one vocabulary (151936) from 0.6B through 32B, so one draft covers every size here.
     (r"^Qwen/Qwen3-(?:1\.7|4|8|14|32)B$", "Qwen/Qwen3-0.6B"),
     (r"^(meta-llama|unsloth)/Llama-3\.2-3B-Instruct$", r"\1/Llama-3.2-1B-Instruct"),
     (r"^(meta-llama|unsloth)/(?:Meta-)?Llama-3\.1-(?:8|70)B-Instruct$", r"\1/Llama-3.2-1B-Instruct"),
