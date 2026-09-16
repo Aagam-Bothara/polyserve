@@ -134,7 +134,14 @@ def combination_fits(hw: HardwareDescriptor, reg: Dict[str, BaseBackend], plan: 
     budget must cover the batch (each stage keeps that true on its own; a combination may not)."""
     from polyserve.memory import estimate
 
+    small_gpu = hw.gpu is not None and hw.gpu.vram_total_bytes < 32 * 2**30
+
     def fn(c: Config) -> bool:
+        # SGLang 0.5.19 captures prefill CUDA graphs up to its prefill budget, outside its memory fraction: on an
+        # RTX 4090 (24 GB) every trial with a budget of 8192 or 16384 ran out of memory at start-up, at 93% and
+        # at 88% reserved, in four calibrations.
+        if c.backend == "sglang" and small_gpu and (c.prefill_budget or 0) >= 8192:
+            return False
         pm = plan.prepared.get(c.backend)
         if pm is None:
             return False
@@ -379,6 +386,7 @@ def calibrate(
                           budget_s=opts.budget_s, confirm_top=3 if opts.confirm else 0,
                           feasible_fn=combination_fits(hw, reg, plan),
                           explore_space=search_space(hw, plan, reg, workload, opts) if opts.explore else [],
+                          spec_first=True,
                           prefill_variants=((lambda c: reg[c.backend].prefill_variants(c))
                                             if phase_tuning and opts.phase_tuning else None))
     t0 = time.monotonic()

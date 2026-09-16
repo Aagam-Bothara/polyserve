@@ -57,6 +57,7 @@ class TrialRunner(Protocol):
 
 
 STAGE_NAMES = {"kv": "a quantized KV cache", "prefix": "prefix-cache settings", "spec": "speculative decoding"}
+_ANY = object()  # "any speculation setting", for _leader and the stages that can hold one fixed
 
 
 def mentions_oom(log: str) -> bool:
@@ -336,6 +337,14 @@ class StagedSearch:
     explore_share: float = 0.3
     explore_min: int = 4
     explore_seed: int = 0
+    # Speculative decoding first, then the prefill knob, the other variant stages and the combinations on the
+    # engine's best configuration for each of its spec_beam best speculation settings (none counts as one). The
+    # other settings pay differently with speculation on: on an RTX 4090 with Llama 3.1 8B the int8 cache and a
+    # 16k prefill budget did nothing alone, and with the draft model they were part of a configuration 28% faster
+    # than the staged pick, which had tuned them before choosing suffix decoding. The pipeline turns it on;
+    # callers that pass their own stages keep the plain order unless they ask.
+    spec_first: bool = False
+    spec_beam: int = 2
     _variant_log: List[Tuple[str, Config, Config]] = field(default_factory=list)  # (dimension, leader, variant)
     results: List[TrialResult] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
@@ -574,6 +583,8 @@ class StagedSearch:
             logger.warning("no prefill variants for %s: %s", base.key(), exc)
             return
         for v in variants:
+            if self.feasible_fn is not None and not self.feasible_fn(v):
+                continue  # a known start-up failure, such as SGLang's large prefill budgets on a 24 GB card
             self._run(v, "prefill")
             self._variant_log.append(("prefill", base, v))
 
@@ -608,13 +619,14 @@ class StagedSearch:
             return None
         return (a.score - b.score) / abs(a.score) if a.score else 0.0
 
-    def _leader_without_each(self, base: Config) -> List[Config]:
-        """The leader with each change the variant stages adopted undone, one at a time.
+    def _leader_without_each(self, base: Config, spec: Any = _ANY) -> List[Config]:
+        """The leader (with the speculation setting `spec`, when given) with each change the variant stages
+        adopted undone, one at a time.
 
         A change adopted early can hurt one adopted later, and only removing it shows that. The
         batch goes back together with the KV cache type too, since the KV stage raises the batch
         when a smaller cache makes room."""
-        leader = self._leader(base.backend)
+        leader = self._leader(base.backend, spec)
         if leader is None:
             return []
         lead = leader.config
@@ -629,7 +641,7 @@ class StagedSearch:
             out.append(lead.model_copy(update={"kv_dtype": base.kv_dtype, "batch": base.batch}))
         return out
 
-    def stage_combinations(self, base: Config) -> None:
+    def stage_combinations(self, base: Config, spec: Any = _ANY, limit: Optional[int] = None) -> None:
         """Stage 3f: measure combinations of the changes that were promising on their own.
 
         Candidates are changes that came within combine_band of the leader they were measured
@@ -642,11 +654,13 @@ class StagedSearch:
         change undone goes first, then the rest by estimate, up to max_combinations new and feasible
         trials in all; the objective and its tie-break then decide as for any trial.
         """
-        first = [c for c in self._leader_without_each(base)
+        first = [c for c in self._leader_without_each(base, spec)
                  if c.key() not in self._done and (self.feasible_fn is None or self.feasible_fn(c))]
         options: Dict[str, List[Tuple[float, Dict[str, Any]]]] = {}
         for dim, ref_cfg, var_cfg in self._variant_log:
             if ref_cfg.backend != base.backend:  # another engine's changes do not carry over
+                continue
+            if spec is not _ANY and dim == "spec":  # the speculation setting is held fixed for this base
                 continue
             gain, delta = self._relative_gain(ref_cfg, var_cfg), self._delta(ref_cfg, var_cfg)
             if gain is None or gain < -self.combine_band or not delta:
@@ -669,15 +683,17 @@ class StagedSearch:
         candidates.sort(key=lambda x: -x[0])
         tried: set = set()
         for cfg in first + [c for _, c in candidates]:
-            if len(tried) >= self.max_combinations:
+            if len(tried) >= (self.max_combinations if limit is None else limit):
                 break
             if cfg.key() not in tried:
                 tried.add(cfg.key())
                 self._run(cfg, "combine")
 
-    def _leader(self, backend: Optional[str] = None) -> Optional[TrialResult]:
-        """The objective's current winner, overall or among one engine's trials."""
-        pool = self.results if backend is None else [r for r in self.results if r.config.backend == backend]
+    def _leader(self, backend: Optional[str] = None, spec: Any = _ANY) -> Optional[TrialResult]:
+        """The objective's current winner, overall or among one engine's trials, and among those with one
+        speculation setting when `spec` is given (None: no speculation)."""
+        pool = [r for r in self.results if (backend is None or r.config.backend == backend)
+                and (spec is _ANY or r.config.spec_decode == spec)]
         leader, _ = pick(pool, self.objective, self.constraints)
         return leader
 
@@ -690,6 +706,49 @@ class StagedSearch:
             except Exception:
                 continue
         return None
+
+    def _offer_count(self, cfg: Config) -> int:
+        """How many variant stages have something to try on `cfg`."""
+        n = 0
+        for _, fn in self.variant_stages:
+            try:
+                n += bool(fn(cfg))
+            except Exception:
+                continue
+        return n
+
+    def _outpaced(self, base: Config) -> bool:
+        """Whether an engine tuned before this one now leads it by more than contender_band while this one
+        offers nothing that engine lacks, so its later stages cannot pay: on an RTX 4090 SGLang, with no
+        speculative decoding, spent 11 of 66 minutes on stages that ended 15% behind vLLM with it."""
+        ranked = rank(self.results, self.objective, self.constraints)
+        if not ranked or self.contender_band <= 0:
+            return False
+        lead = ranked[0]
+        lb = lead.result.config.backend
+        mine = next((x for x in ranked if x.result.config.backend == base.backend), None)
+        if lb == base.backend or mine is None or not (lead.feasible and mine.feasible):
+            return False
+        gap = (mine.score - lead.score) / abs(lead.score) if lead.score else 0.0
+        # What an engine can do, not what is left to try: the leader's first configuration, before its stages
+        # adopted a KV cache or a speculation setting, stands for its engine.
+        lead_base = next(r.config for r in self.results if r.config.backend == lb)
+        if gap <= self.contender_band or self._offers_more(mine.result.config, lead_base):
+            return False
+        self.notes.append(f"{base.backend} was not tuned further: {lb} led it by {gap:.0%} once tuned, and "
+                          f"{base.backend} offers nothing {lb} does not")
+        return True
+
+    def _spec_settings(self, backend: str) -> List[Optional[str]]:
+        """The engine's spec_beam best speculation settings, best first; no speculation counts as one."""
+        out: List[Optional[str]] = []
+        for x in rank([r for r in self.results if r.config.backend == backend], self.objective, self.constraints):
+            s = x.result.config.spec_decode
+            if s not in out:
+                out.append(s)
+            if len(out) >= self.spec_beam:
+                break
+        return out
 
     def _contenders(self, after: str = "the batch stage") -> List[Config]:
         """The leader's config, then the best config of every other engine within contender_band of it, or
@@ -724,18 +783,39 @@ class StagedSearch:
 
     def _tune(self, base: Config) -> None:
         """Stages 3b-3f for one engine: the prefill knob, the variant stages and the combinations, each on
-        that engine's own leader."""
-        if self.prefill_variants is not None:
-            self.stage_prefill(base)
-        for name, fn in self.variant_stages:
+        that engine's own leader. With spec_first, speculative decoding goes first, and the rest runs once for
+        each of the engine's spec_beam best speculation settings, on its best configuration with that setting
+        (the combinations share max_combinations between them)."""
+        spec_stages = [(n, fn) for n, fn in self.variant_stages if n == "spec"] if self.spec_first else []
+        if not spec_stages:
+            if self.prefill_variants is not None:
+                self.stage_prefill(base)
+            for name, fn in self.variant_stages:
+                self.stage_variants(name, fn, backend=base.backend)
+            if self.combine:
+                self.stage_combinations(base)
+            return
+        for name, fn in spec_stages:
             self.stage_variants(name, fn, backend=base.backend)
-        if self.combine:
-            self.stage_combinations(base)
+        settings = self._spec_settings(base.backend)
+        limit = max(2, self.max_combinations // max(1, len(settings)))
+        for spec in settings:
+            start = self._leader(base.backend, spec)
+            if start is None:
+                continue
+            if self.prefill_variants is not None:
+                self.stage_prefill(start.config)
+            for name, fn in self.variant_stages:
+                if name != "spec":
+                    self.stage_variants(name, fn, backend=base.backend, spec=spec)
+            if self.combine:
+                self.stage_combinations(start.config, spec=spec, limit=limit)
 
-    def stage_variants(self, name: str, fn: Callable[[Config], List[Config]], backend: Optional[str] = None) -> None:
-        """Measure the leader's variants along one dimension (one engine's leader when `backend` is given);
-        the objective keeps the best."""
-        leader = self._leader(backend)
+    def stage_variants(self, name: str, fn: Callable[[Config], List[Config]], backend: Optional[str] = None,
+                       spec: Any = _ANY) -> None:
+        """Measure the leader's variants along one dimension (one engine's leader when `backend` is given, and
+        its leader with one speculation setting when `spec` is); the objective keeps the best."""
+        leader = self._leader(backend, spec)
         if leader is None:
             return
         try:
@@ -889,8 +969,11 @@ class StagedSearch:
                     self.stage_variants(name, fn, backend=base.backend)
         chosen = self.stage_memory(feasible, kept)
         self.stage_batch(feasible, chosen)
-        for base in self._contenders():
-            self._tune(base)
+        # Engines offering more strategies go first (a stable sort, so the leader first among equals), and one
+        # that an engine tuned before it has left clearly behind, with nothing more to offer, is skipped.
+        for base in sorted(self._contenders(), key=lambda c: -self._offer_count(c)):
+            if not self._outpaced(base):
+                self._tune(base)
         self.stage_explore()
         pool = self.results
         if self.confirm_top > 0:
