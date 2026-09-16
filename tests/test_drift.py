@@ -5,7 +5,7 @@ import json
 from fastapi.testclient import TestClient
 
 from polyserve.drift import TrafficWatch
-from polyserve.serve.proxy import create_app
+from polyserve.serve.proxy import _ask_for_usage, create_app
 
 CHAT = {"name": "chat", "prefill_tokens": 512, "decode_tokens": 128, "concurrencies": [1, 4, 8]}
 
@@ -119,3 +119,33 @@ def test_the_drift_endpoint_is_absent_without_a_watch():
 
     with TestClient(app) as client:
         assert client.get("/polyserve/drift").status_code == 404
+
+
+def test_streamed_requests_are_asked_for_their_usage():
+    """Most OpenAI clients stream, and a streamed reply carries no token counts unless the request asks."""
+    out = json.loads(_ask_for_usage(json.dumps({"prompt": "hi", "stream": True}).encode()))
+
+    assert out["stream_options"] == {"include_usage": True}
+    assert out["prompt"] == "hi" and out["stream"] is True
+
+
+def test_requests_that_should_not_be_touched_are_not():
+    plain = json.dumps({"prompt": "hi"}).encode()  # not streaming: nothing to ask for
+    assert _ask_for_usage(plain) == plain
+    assert _ask_for_usage(b"not json at all") == b"not json at all"
+    assert _ask_for_usage(b"") == b""
+    chosen = json.dumps({"prompt": "hi", "stream": True, "stream_options": {"include_usage": False}}).encode()
+    assert _ask_for_usage(chosen) == chosen  # a caller who already decided keeps their decision
+
+
+def test_token_counts_are_taken_from_a_streamed_usage_chunk():
+    watch = TrafficWatch(CHAT)
+    watch.began()
+    watch.record_stream_chunk(b'data: {"choices":[{"delta":{"content":"x"}}]}\n\n')
+    watch.record_stream_chunk(
+        b'data: {"choices":[],"usage":{"prompt_tokens":700,"completion_tokens":120}}\n\ndata: [DONE]\n\n')
+    watch.ended()
+
+    report = watch.report()
+    assert report["requests_with_token_counts"] == 1
+    assert report["prompt_tokens"]["median"] == 700 and report["completion_tokens"]["median"] == 120

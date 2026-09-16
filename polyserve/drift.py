@@ -89,6 +89,35 @@ class TrafficWatch:
                 if isinstance(value, int) and value > 0:
                     into.append(value)
 
+    def record_stream_chunk(self, chunk: bytes) -> None:
+        """Take token counts out of a streamed reply's usage chunk.
+
+        Streamed replies carry no counts unless the request asked for them, and most OpenAI clients stream, so
+        the proxy adds `stream_options: {"include_usage": true}` on the way past and reads the result here.
+        """
+        if not chunk:
+            return
+        for line in chunk.split(b"\n"):
+            line = line.strip()
+            if not line.startswith(b"data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == b"[DONE]":
+                continue
+            try:
+                body = json.loads(payload)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            usage = body.get("usage") if isinstance(body, dict) else None
+            if not isinstance(usage, dict):
+                continue
+            with self._lock:
+                for key, into in (("prompt_tokens", self.prompt_tokens),
+                                  ("completion_tokens", self.completion_tokens)):
+                    value = usage.get(key)
+                    if isinstance(value, int) and value > 0:
+                        into.append(value)
+
     # ------------------------------------------------------------------ reading
 
     @property

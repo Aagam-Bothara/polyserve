@@ -6,6 +6,7 @@ serves), plus /polyserve/profile and /health. Streaming responses are passed thr
 
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
@@ -27,6 +28,31 @@ HOP_BY_HOP = {
 
 def _filtered(headers: httpx.Headers) -> Dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in HOP_BY_HOP}
+
+
+def _ask_for_usage(raw: bytes) -> bytes:
+    """Add `stream_options: {"include_usage": true}` to a streaming request, leaving everything else alone.
+
+    A streamed reply carries no token counts unless it was asked for, and most OpenAI clients stream, so without
+    this the drift report would only ever see the non-streaming minority. The extra final chunk carries usage and
+    an empty `choices`, which the OpenAI clients accept; a request that already set stream_options is untouched.
+    """
+    if not raw:
+        return raw
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return raw
+    if not isinstance(body, dict) or not body.get("stream"):
+        return raw
+    options = body.get("stream_options")
+    if isinstance(options, dict) and "include_usage" in options:
+        return raw
+    body["stream_options"] = {**(options if isinstance(options, dict) else {}), "include_usage": True}
+    try:
+        return json.dumps(body).encode()
+    except (TypeError, ValueError):
+        return raw
 
 
 def create_app(
@@ -93,6 +119,8 @@ def create_app(
     async def passthrough(path: str, request: Request) -> Response:
         client: httpx.AsyncClient = state["client"]
         body = await request.body()
+        if watch is not None:
+            body = _ask_for_usage(body)
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
         upstream_req = client.build_request(
             request.method,
@@ -120,8 +148,15 @@ def create_app(
                 if watch is not None:
                     watch.ended()
 
+            async def _tee():
+                """Pass the bytes through untouched, reading the usage chunk on the way past."""
+                async for chunk in upstream.aiter_raw():
+                    if watch is not None:
+                        watch.record_stream_chunk(chunk)
+                    yield chunk
+
             return StreamingResponse(
-                upstream.aiter_raw(),
+                _tee(),
                 status_code=upstream.status_code,
                 headers=_filtered(upstream.headers),
                 media_type="text/event-stream",
