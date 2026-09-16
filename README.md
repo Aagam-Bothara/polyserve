@@ -4,7 +4,7 @@
 
 **PolyServe finds the fastest way to serve an LLM on your GPU and your traffic, then serves it behind an OpenAI-compatible API.** It measures real configurations — engine, weight precision, batch size, KV-cache type, speculative decoding — instead of guessing, because the settings that won changed on every card tried.
 
-| Llama 3.1 8B, held-out prompts | PolyServe | an expert's rule of thumb † | stock default |
+| Llama 3.1 8B, held-out prompts | PolyServe | a fixed rule of thumb † | stock default |
 |---|---|---|---|
 | RTX 4090 | **1041 tok/s** | 667 (+56%) | SGLang 448 (+132%) |
 | A100 | **1155 tok/s** | 674 (+71%) | vLLM 726 (+59%) |
