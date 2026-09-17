@@ -78,8 +78,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         run = random_search(space, runner, args.objective, cons, budget, seed=seed)
         print(f"random search, seed {seed}: {len(run.results)} of {len(space)} configurations in {run.seconds:.0f}s; "
               f"pick {run.winner.config.key() if run.winner else '-'}", flush=True)
+        # Keep the per-draw series, not just the totals: comparing how fast each search reaches its own answer
+        # needs best-so-far against elapsed time, and a run that saved only aggregates cannot be re-analysed.
+        t0 = min((r.started_at for r in run.results), default=0.0)
+        series, best_so_far = [], 0.0
+        for i, r in enumerate(sorted(run.results, key=lambda r: r.started_at), 1):
+            if r.ok:
+                best_so_far = max(best_so_far, r.metrics.tok_s)
+            series.append({"trial": i, "elapsed_s": round(r.started_at - t0, 1), "config": r.config.key(),
+                           "tok_s": round(r.metrics.tok_s, 1) if r.ok else None,
+                           "best_so_far": round(best_so_far, 1)})
         summary["searches"].append({"seed": seed, "trials": len(run.results), "seconds": run.seconds,
-                                    "untried": run.untried, "pick": run.winner.config.key() if run.winner else None})
+                                    "untried": run.untried, "pick": run.winner.config.key() if run.winner else None,
+                                    "series": series})
         if run.winner is not None:
             extra[f"random-search-seed{seed}"] = run.winner.config
 

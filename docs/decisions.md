@@ -33,6 +33,26 @@ the cases it was made for. Nothing here supports "the search order is what pays"
 narrower claim these stages were built for — the same answer every run, every strategy tried at least once, and
 a profile that says what each setting was worth.
 
+Two ways of doing better were then measured against the recorded calibrations, and neither pays.
+
+**Reaching the answer sooner.** If staging found its pick in a handful of trials while random sampling needed
+dozens, the claim would be speed rather than quality. Across 13 recorded calibrations it reaches 95% of its own
+final answer at a median of **13 of 25 trials**, having spent 43% of its wall-clock — against the 24 to 44 draws
+random search needed. That is roughly a factor of two, not the order of magnitude that would make "calibration in
+five minutes" true, and the spread is wide: two runs got there in 3–4 trials, three needed 16–19.
+
+**Sampling from a prior instead of uniformly.** The obvious way to beat random sampling is to draw configurations
+in proportion to how good they are predicted to be, using the performance predictor fitted from previous
+calibrations — memory across runs being the one advantage random sampling cannot have. Leave one calibration out,
+fit on the rest, and ask where the predictor ranks the configuration that actually won: **median rank 15 of ~25,
+and never in the top 5 across 8 folds** — and those 25 are already the configurations the staged search chose to
+measure, so they are biased towards good ones. A rank correlation of 0.88–0.94 is enough to prune quantizations
+that cannot win and nowhere near enough to order near-optimal configurations against each other, which is exactly
+what a sampler needs. Sampling on those scores would be worse than uniform.
+
+Both were computed from data already on disk, before spending anything on a GPU, which is the only reason it was
+cheap to learn that the search is at its practical ceiling for this space.
+
 ## Why measure at all, instead of a rule of thumb?
 
 Because a defensible rule of thumb lost, including to doing nothing. The rule (fp8 weights and KV cache, a short
