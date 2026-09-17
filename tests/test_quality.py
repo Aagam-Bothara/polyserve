@@ -158,6 +158,37 @@ def test_no_probe_when_the_gate_was_not_asked_for():
     assert quality_probe_for(SearchOptions(), get_workload("chat")) is None
 
 
+def _plan_with(quants, spec_id="org/big-model"):
+    from polyserve.models import ModelSpec
+    from polyserve.pipeline import PlanResult
+
+    plan = PlanResult(hw=None, spec=ModelSpec(hf_id=spec_id), candidates=["vllm"])
+    plan.feasible["vllm"] = [(Config(backend="vllm", quant=q, ctx=4096, batch=16), None) for q in quants]
+    return plan
+
+
+def test_a_card_that_cannot_hold_full_precision_says_so(caplog):
+    """`--quant auto` skips 4-bit checkpoints on quality grounds, which is the right default and the wrong
+    silence: on a 14B at 24 GB the skipped ones measured 3.9x faster for about 2 GSM8K points."""
+    from polyserve.pipeline import _warn_if_only_quantized_fits
+
+    with caplog.at_level("WARNING"):
+        _warn_if_only_quantized_fits(_plan_with(["fp8"]), SearchOptions())
+
+    assert "does not fit this GPU at full precision" in caplog.text
+    assert "--quant auto,awq,gptq" in caplog.text
+
+
+def test_no_such_warning_when_full_precision_fits_or_the_user_chose(caplog):
+    from polyserve.pipeline import _warn_if_only_quantized_fits
+
+    with caplog.at_level("WARNING"):
+        _warn_if_only_quantized_fits(_plan_with(["bf16", "fp8"]), SearchOptions())  # bf16 fits: nothing to say
+        _warn_if_only_quantized_fits(_plan_with(["fp8"]), SearchOptions(quants=["fp8"]))  # their own choice
+
+    assert caplog.text == ""
+
+
 def test_a_probe_records_each_precision_once():
     p = QualityProbe(prompts=["q1"])
     assert p.wanted("vllm", "bf16")

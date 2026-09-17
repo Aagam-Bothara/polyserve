@@ -214,6 +214,7 @@ def search_space(hw: HardwareDescriptor, plan: "PlanResult", reg: Dict[str, Base
         stages.append(lambda c: reg[c.backend].prefix_variants(c))
     if opts.speculative:
         stages.append(lambda c: reg[c.backend].spec_variants(c, plan.prepared[c.backend]))
+    _warn_if_only_quantized_fits(plan, opts)
     configs = list(plan.all_feasible)
     if not opts.prefix_cache:
         configs = [c.model_copy(update={"prefix_cache": False}) for c in configs]
@@ -232,6 +233,31 @@ def select(
 ) -> Tuple[List[str], Dict[str, BaseBackend]]:
     reg = backend_registry()
     return select_backends(hw, spec, reg, force=force), reg
+
+
+FULL_PRECISION = ("bf16", "fp16", "fp32")
+
+
+def _warn_if_only_quantized_fits(plan, opts) -> None:
+    """Say so when the card cannot hold the model at full precision and 4-bit checkpoints are not being tried.
+
+    `--quant auto` leaves the Hub's pre-quantized checkpoints out, because they can cost answer quality, and that
+    is the right default — but it is the wrong silence. On a 24 GB card a 14B fits in none of bf16, and the 4-bit
+    checkpoints `auto` skips measured 3.9x the best configuration it does consider, for about 2 GSM8K points. A
+    user who never hears that cannot make the trade; one who hears it can, which is why this is a message and not
+    a change of default.
+    """
+    if opts.quants is not None:  # the user chose the list themselves
+        return
+    feasible = plan.all_feasible
+    if not feasible or any(c.quant in FULL_PRECISION for c in feasible):
+        return
+    logging.getLogger(__name__).warning(
+        "%s does not fit this GPU at full precision, so calibration is limited to %s. The Hub's pre-quantized "
+        "4-bit checkpoints are excluded by --quant auto because they can cost answer quality: on a 14B at 24 GB "
+        "they measured 3.9x faster for about 2 GSM8K points. Add --quant auto,awq,gptq to consider them, and "
+        "benchmarks/task_quality.py to grade the result.",
+        plan.spec.hf_id, ", ".join(sorted({c.quant for c in feasible})))
 
 
 def quality_probe_for(opts, workload):
