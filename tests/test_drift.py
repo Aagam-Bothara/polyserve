@@ -120,6 +120,56 @@ def test_streamed_replies_count_as_requests_without_token_counts():
     assert report["prompt_tokens"]["median"] is None and report["drift"] == []
 
 
+CHAT_CEILING = {**CHAT, "ttft_ceiling_ms": 500.0}
+
+
+def test_latency_past_the_ceiling_is_reported_but_never_warns():
+    """A load spike breaches the ceiling through queueing, which re-tuning would not fix."""
+    watch = TrafficWatch(CHAT_CEILING)
+    for _ in range(60):
+        watch.began()
+        watch.record_response(_body(500, 120), "application/json")
+        watch.record_ttft(900.0)
+        watch.ended()
+
+    assert watch.findings() == []        # the shape of the work itself has not drifted
+    assert watch.should_warn() is False  # so the breach never lights the drift warning
+    found = watch.latency_findings()
+    assert len(found) == 1 and "time to first token" in found[0] and "500 ms ceiling" in found[0]
+    assert "concurrent requests" in found[0]  # the load it was seen at, which is half the diagnosis
+    assert watch.report()["latency"]["verdict"] == "past the calibrated ceiling"
+
+
+def test_latency_inside_the_ceiling_is_not_reported():
+    watch = TrafficWatch(CHAT_CEILING)
+    for _ in range(30):
+        watch.began()
+        watch.record_ttft(120.0)
+        watch.ended()
+
+    assert watch.latency_findings() == []
+    assert watch.report()["latency"]["ttft_ms"]["p95"] == 120.0
+    assert watch.report()["latency"]["verdict"] == "inside the calibrated ceiling"
+
+
+def test_too_few_streamed_replies_to_judge_latency():
+    watch = TrafficWatch(CHAT_CEILING)
+    for _ in range(5):
+        watch.began()
+        watch.record_ttft(5000.0)
+        watch.ended()
+
+    assert watch.latency_findings() == []
+    assert watch.report()["latency"]["verdict"] == "not enough streamed traffic yet"
+
+
+def test_a_profile_with_no_ceiling_says_so_rather_than_judging():
+    watch = TrafficWatch({"name": "x"})
+
+    assert watch.latency_findings() == []
+    assert watch.report()["latency"]["verdict"] == "no ceiling recorded in this profile"
+
+
 def test_the_operator_is_warned_once():
     watch = TrafficWatch(CHAT)
     _serve(watch, 60, prompt=3000)

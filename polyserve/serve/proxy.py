@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
@@ -129,6 +130,7 @@ def create_app(
             headers=headers,
             params=request.query_params,
         )
+        started = time.perf_counter()
         if watch is not None:
             watch.began()
         try:
@@ -149,10 +151,14 @@ def create_app(
                     watch.ended()
 
             async def _tee():
-                """Pass the bytes through untouched, reading the usage chunk on the way past."""
+                """Pass the bytes through untouched, timing the first chunk and reading the usage one."""
+                first = True
                 async for chunk in upstream.aiter_raw():
                     if watch is not None:
+                        if first:
+                            watch.record_ttft((time.perf_counter() - started) * 1000)
                         watch.record_stream_chunk(chunk)
+                    first = False
                     yield chunk
 
             return StreamingResponse(

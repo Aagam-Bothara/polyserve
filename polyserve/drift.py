@@ -8,6 +8,9 @@ is a decision rather than a guess.
 Only what the backend already reports is counted: the `usage` block of non-streaming responses. Streamed replies
 are passed through byte-for-byte, so they count as requests and toward concurrency but carry no token counts; a
 purely streaming deployment therefore sees concurrency drift but not length drift. Nothing here reads prompt text.
+
+Served latency is watched the same way, for streamed replies only, and is reported rather than warned about,
+because a load spike breaches a ceiling through queueing and re-tuning would not fix that: see `latency_findings`.
 """
 
 from __future__ import annotations
@@ -21,6 +24,10 @@ WINDOW = 512  # requests kept for the rolling picture
 MIN_REQUESTS = 50  # below this, say "not enough traffic yet" rather than cry drift
 WIDER_THAN = 1.5  # a median this many times the calibrated value counts as drift
 NARROWER_THAN = 1 / WIDER_THAN
+MIN_LATENCY_SAMPLES = 20  # streamed replies needed before a ceiling breach is worth saying
+# The proxy sees queueing and its own hop on top of the engine's own time to first token, so a breach is
+# called only when the ceiling is clearly passed rather than grazed.
+BREACH_MARGIN = 1.2
 
 
 def _median(values: Sequence[int]) -> Optional[float]:
@@ -31,7 +38,7 @@ def _median(values: Sequence[int]) -> Optional[float]:
     return float(ordered[mid]) if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
 
 
-def _percentile(values: Sequence[int], pct: float) -> Optional[float]:
+def _percentile(values: Sequence[float], pct: float) -> Optional[float]:
     if not values:
         return None
     ordered = sorted(values)
@@ -53,6 +60,8 @@ class TrafficWatch:
         self.calibrated_prompt_p90 = seen.get("p90")
         self.calibrated_completion = spec.get("decode_tokens")
         self.calibrated_concurrency: List[int] = [int(c) for c in (spec.get("concurrencies") or [])]
+        self.ttft_ceiling_ms = spec.get("ttft_ceiling_ms")
+        self.ttft_ms: Deque[float] = deque(maxlen=window)
         self.min_requests = min_requests
         self.requests = 0
         self.in_flight = 0
@@ -122,6 +131,17 @@ class TrafficWatch:
                     if isinstance(value, int) and value > 0:
                         into.append(value)
 
+    def record_ttft(self, ms: float) -> None:
+        """Time from the request reaching the proxy to the first streamed chunk leaving it.
+
+        Only a streamed reply exposes this: a non-streamed body arrives whole, so its total time is not a
+        time to first token and is not recorded as one. This measurement includes queueing and the proxy's
+        own hop, so it reads a little above what calibration measured against the engine directly.
+        """
+        if ms >= 0:
+            with self._lock:
+                self.ttft_ms.append(float(ms))
+
     # ------------------------------------------------------------------ reading
 
     @property
@@ -161,6 +181,32 @@ class TrafficWatch:
                 out.append(f"traffic runs at {typical:.0f} concurrent requests; the profile was measured at {levels}")
         return out
 
+    def latency_findings(self) -> List[str]:
+        """Whether served latency still respects the ceiling the profile was tuned against.
+
+        Deliberately kept out of `findings`: a load spike breaches the ceiling through queueing, which
+        re-tuning cannot fix, so this reports and never triggers the drift warning. The load it was seen
+        at is named alongside, because that is what separates "the wrong configuration" from "more
+        traffic than this was ever measured at".
+        """
+        out: List[str] = []
+        if len(self.ttft_ms) < MIN_LATENCY_SAMPLES or not self.ttft_ceiling_ms:
+            return out
+        p95 = _percentile(self.ttft_ms, 95)
+        if p95 is not None and p95 > self.ttft_ceiling_ms * BREACH_MARGIN:
+            busy = _median(self.concurrency)
+            at = f", at {busy:.0f} concurrent requests" if busy is not None else ""
+            out.append(f"time to first token is {p95:.0f} ms at the 95th percentile{at}, past the "
+                       f"{self.ttft_ceiling_ms:.0f} ms ceiling this profile was tuned against")
+        return out
+
+    def latency_verdict(self) -> str:
+        if not self.ttft_ceiling_ms:
+            return "no ceiling recorded in this profile"
+        if len(self.ttft_ms) < MIN_LATENCY_SAMPLES:
+            return "not enough streamed traffic yet"
+        return "past the calibrated ceiling" if self.latency_findings() else "inside the calibrated ceiling"
+
     def should_warn(self) -> bool:
         """True once, the first time drift is worth telling the operator about."""
         with self._lock:
@@ -184,6 +230,12 @@ class TrafficWatch:
                                   "calibrated": self.calibrated_completion},
             "concurrency": {"median": _median(self.concurrency), "peak": self.peak_in_flight,
                             "calibrated": self.calibrated_concurrency},
+            "latency": {"ttft_ms": {"median": _percentile(self.ttft_ms, 50),
+                                    "p95": _percentile(self.ttft_ms, 95)},
+                        "ceiling_ms": self.ttft_ceiling_ms,
+                        "streamed_requests_timed": len(self.ttft_ms),
+                        "findings": self.latency_findings(),
+                        "verdict": self.latency_verdict()},
             "drift": findings,
             "verdict": ("not enough traffic yet" if not self.enough_data else
                         "drifted from the calibrated workload" if findings else

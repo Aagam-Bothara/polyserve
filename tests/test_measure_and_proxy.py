@@ -18,6 +18,7 @@ from polyserve.backends.base import LlmtraceHooks
 from polyserve.calibrate.measure import RequestOutcome, _metrics_from, _parse_sse_line, run_trial
 from polyserve.calibrate.tokens import TokenCounter, worst_source
 from polyserve.calibrate.workload import Workload
+from polyserve.drift import TrafficWatch
 from polyserve.serve.proxy import create_app
 
 
@@ -149,6 +150,31 @@ def test_proxy_streams_and_forwards(upstream):
             lines = [ln for ln in s.iter_lines() if ln.startswith("data:")]
         assert lines[-1] == "data: [DONE]" and len(lines) == 4  # 2 content chunks + usage + DONE
         assert client.get("/polyserve/profile").status_code == 404
+
+
+def test_the_proxy_times_the_first_streamed_chunk(upstream):
+    srv, _ = upstream
+    watch = TrafficWatch({"name": "chat", "ttft_ceiling_ms": 500.0})
+    app = create_app(srv.url, profile=None, status_fn=lambda: {"alive": True}, watch=watch)
+    with TestClient(app) as client:
+        with client.stream("POST", "/v1/completions",
+                           json={"prompt": "hi", "max_tokens": 4, "stream": True}) as s:
+            list(s.iter_lines())
+
+    assert len(watch.ttft_ms) == 1 and watch.ttft_ms[0] > 0  # one streamed reply, timed once
+    assert watch.report()["latency"]["streamed_requests_timed"] == 1
+
+
+def test_a_non_streamed_reply_is_never_timed_as_a_first_token(upstream):
+    """Its body arrives whole, so its total time is not a time to first token and must not pose as one."""
+    srv, _ = upstream
+    watch = TrafficWatch({"name": "chat", "ttft_ceiling_ms": 500.0})
+    app = create_app(srv.url, profile=None, status_fn=lambda: {"alive": True}, watch=watch)
+    with TestClient(app) as client:
+        assert client.post("/v1/completions", json={"prompt": "hi", "max_tokens": 3}).status_code == 200
+
+    assert list(watch.ttft_ms) == []
+    assert watch.report()["latency"]["verdict"] == "not enough streamed traffic yet"
 
 
 def test_proxy_reports_upstream_down():
