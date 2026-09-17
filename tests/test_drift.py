@@ -8,6 +8,10 @@ from polyserve.drift import TrafficWatch
 from polyserve.serve.proxy import _ask_for_usage, create_app
 
 CHAT = {"name": "chat", "prefill_tokens": 512, "decode_tokens": 128, "concurrencies": [1, 4, 8]}
+CHAT_MEASURED = {**CHAT, "prompt_tokens_seen": {"p50": 500, "p90": 900, "max": 1000, "mean": 560}}
+# A --workload-file's prefill is a cap, so the prompts it actually served sit well below it.
+FILE_MEASURED = {**CHAT, "prefill_tokens": 4096,
+                 "prompt_tokens_seen": {"p50": 600, "p90": 900, "max": 4096, "mean": 800}}
 
 
 def _body(prompt: int, completion: int) -> bytes:
@@ -43,6 +47,38 @@ def test_longer_prompts_are_reported_as_drift():
     assert len(findings) == 1 and "prompts are" in findings[0] and "longer" in findings[0]
     assert "3000" in findings[0] and "512" in findings[0]
     assert watch.report()["verdict"] == "drifted from the calibrated workload"
+
+
+def test_a_heavier_tail_is_drift_even_when_the_median_still_matches():
+    """The long requests are the ones that breach a latency ceiling, and a median hides them."""
+    watch = TrafficWatch(CHAT_MEASURED)
+    for i in range(60):
+        watch.began()
+        watch.record_response(_body(500 if i % 4 else 4000, 120), "application/json")
+        watch.ended()
+
+    findings = watch.findings()
+    assert len(findings) == 1 and "longest prompts" in findings[0] and "p90" in findings[0]
+    assert watch.report()["prompt_tokens"]["median"] == 500  # the median alone says nothing is wrong
+    assert watch.report()["prompt_tokens"]["calibrated_p90"] == 900
+    assert watch.report()["verdict"] == "drifted from the calibrated workload"
+
+
+def test_drift_is_judged_against_measured_prompts_not_the_nominal_cap():
+    watch = TrafficWatch(FILE_MEASURED)
+    _serve(watch, 60, prompt=600)
+
+    # 600 is what calibration actually served; against the 4096 cap it would look 6.8x too short.
+    assert watch.findings() == []
+    assert watch.report()["prompt_tokens"]["calibrated"] == 600
+
+
+def test_a_profile_without_measured_prompts_falls_back_to_the_nominal_prefill():
+    watch = TrafficWatch(CHAT)  # written before prompt lengths were recorded
+    _serve(watch, 60, prompt=5000)
+
+    assert watch.report()["prompt_tokens"]["calibrated_p90"] is None
+    assert any("prompts are" in f for f in watch.findings())
 
 
 def test_much_shorter_answers_are_reported_as_drift():

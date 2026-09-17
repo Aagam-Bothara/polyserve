@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from typer.testing import CliRunner
 
@@ -33,6 +35,35 @@ def test_get_workload_returns_independent_copies():
     a.prompts[0] = "changed"
     a.fitted = True
     assert b.prompts[0] != "changed" and not b.fitted
+
+
+class _Counter:
+    """One token per word: enough to exercise the length bookkeeping without a real tokenizer."""
+
+    available = True
+
+    @staticmethod
+    def count(text: str) -> int:
+        return len(text.split())
+
+
+def test_spec_records_how_long_the_calibration_prompts_really_were():
+    wl = Workload(n_prompts=4, prompts=["a b", "a b c d", "a " * 50, "a " * 100], fitted=True)
+    assert "prompt_tokens_seen" not in wl.spec()  # nothing has measured them yet
+
+    wl.measured_prompt_tokens(_Counter())
+    seen = wl.spec()["prompt_tokens_seen"]
+    assert seen["p50"] == 50 and seen["p90"] == 100 and seen["max"] == 100
+    assert seen["mean"] == 39  # the mean on its own describes none of these four prompts
+
+
+def test_a_copy_whose_prompts_changed_does_not_report_its_parents_lengths():
+    wl = Workload(n_prompts=4, prompts=["a b", "a b c d", "a " * 50, "a " * 100], fitted=True)
+    wl.measured_prompt_tokens(_Counter())
+
+    # A level takes a slice, and a fresh level clears them: neither still matches the counts.
+    assert "prompt_tokens_seen" not in replace(wl, prompts=wl.prompts[:2], n_prompts=2).spec()
+    assert "prompt_tokens_seen" not in replace(wl, prompts=[], fitted=False).spec()
 
 
 def test_ctx_grid_respects_workload_minimum():

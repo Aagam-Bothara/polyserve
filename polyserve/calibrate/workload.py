@@ -30,7 +30,7 @@ import random
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from polyserve.calibrate.datasets import CHARS_PER_TOKEN, FILE_PREFIX
 from polyserve.calibrate.tokens import TokenCounter
@@ -50,6 +50,12 @@ _SUFFIX = "\n\nContinue the text:"
 CTX_HEADROOM = 64  # tokens of slack for chat templates / special tokens
 MIN_LEVEL_REQUESTS = 8  # fewest requests a level sends when requests_per_slot caps it
 MAX_FILE_PREFILL = 32768  # a longer prompt in a --workload-file is cut to this many tokens, keeping its start
+
+
+def _pct(values: Sequence[int], pct: float) -> int:
+    ordered = sorted(values)
+    idx = min(len(ordered) - 1, max(0, int(round(pct / 100 * (len(ordered) - 1)))))
+    return int(ordered[idx])
 
 
 @dataclass
@@ -72,6 +78,10 @@ class Workload:
     prefix_fixed: bool = False  # the prefix was given (e.g. a warmup reusing it) and must not change
     prompts: List[str] = field(default_factory=list)
     fitted: bool = False  # prompts were sized with a real tokenizer
+    # Token count of each entry in `prompts`, once a tokenizer has counted them. Held beside the prompts
+    # rather than summarised, so a copy whose prompts were replaced or sliced is caught by the length
+    # check in `prompt_token_stats` instead of reporting its parent's spread.
+    token_counts: List[int] = field(default_factory=list)
     # Real text instead of random words (see polyserve.calibrate.datasets). prefill_tokens is then a
     # cap, and with natural_stop answers end when the model stops rather than at decode_tokens.
     source: str = "synthetic"
@@ -87,6 +97,7 @@ class Workload:
             self.prefix_text = self._prefix(max(4, int(self.shared_prefix_tokens * 0.8)))
         if not self.prompts and self.source == "synthetic":  # real text downloads: only when needed
             self.prompts = self._generate()
+            self.token_counts = []  # a copy's regenerated prompts are not the ones that were counted
 
     def level_requests(self, concurrency: int) -> int:
         """How many of the prompts a level at this concurrency sends."""
@@ -98,6 +109,7 @@ class Workload:
         """Generate or download the prompts if they are not there yet."""
         if not self.prompts:
             self.prompts = self._generate()
+            self.token_counts = []
         return self
 
     @property
@@ -150,6 +162,7 @@ class Workload:
                     n = counter.count(prompt)
                 fitted_real.append(prompt)
             self.prompts = fitted_real
+            self.token_counts = []
             self.fitted = True
             return self
         if self.shared_prefix_tokens and not self.prefix_fixed:
@@ -182,6 +195,7 @@ class Workload:
                 n_words = max(4, n_words + (step if step != 0 else (1 if delta > 0 else -1)))
             fitted.append(prompt)
         self.prompts = fitted
+        self.token_counts = []
         self.fitted = True
         return self
 
@@ -189,7 +203,21 @@ class Workload:
         if not counter.available or not self.prompts:
             return None
         counts = [counter.count(p) or 0 for p in self.prompts]
+        self.token_counts = counts
         return int(round(sum(counts) / len(counts)))
+
+    def prompt_token_stats(self) -> Optional[Dict[str, int]]:
+        """How long the calibration prompts actually were, or None if no tokenizer measured these ones.
+
+        A mean describes no real request when the set is bimodal (short chats beside long documents),
+        and it leaves live traffic's p90 with nothing to be compared against. The tail is what breaches
+        a TTFT ceiling, so it is recorded too.
+        """
+        if not self.token_counts or len(self.token_counts) != len(self.prompts):
+            return None
+        counts = self.token_counts
+        return {"p50": _pct(counts, 50), "p90": _pct(counts, 90), "max": max(counts),
+                "mean": int(round(sum(counts) / len(counts)))}
 
     @property
     def _source_label(self) -> str:
@@ -212,6 +240,7 @@ class Workload:
 
     def spec(self) -> Dict[str, object]:
         """Serialisable description stored in profiles and benchmark results."""
+        stats = self.prompt_token_stats()
         return {
             "name": self.name,
             "n_prompts": self.n_prompts,
@@ -225,6 +254,7 @@ class Workload:
             "source": self.source,
             "natural_stop": self.natural_stop,
             **({"requests_per_slot": self.requests_per_slot} if self.requests_per_slot else {}),
+            **({"prompt_tokens_seen": stats} if stats else {}),
         }
 
 

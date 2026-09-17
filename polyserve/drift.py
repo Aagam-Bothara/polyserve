@@ -46,7 +46,11 @@ class TrafficWatch:
                  min_requests: int = MIN_REQUESTS) -> None:
         spec = workload_spec or {}
         self.workload_name = spec.get("name")
-        self.calibrated_prompt = spec.get("prefill_tokens")
+        # Prompts a tokenizer actually measured describe the calibration set better than the nominal
+        # prefill, which is only a cap for a --workload-file and a mean at best. Older profiles carry none.
+        seen = spec.get("prompt_tokens_seen") or {}
+        self.calibrated_prompt = seen.get("p50") or spec.get("prefill_tokens")
+        self.calibrated_prompt_p90 = seen.get("p90")
         self.calibrated_completion = spec.get("decode_tokens")
         self.calibrated_concurrency: List[int] = [int(c) for c in (spec.get("concurrencies") or [])]
         self.min_requests = min_requests
@@ -129,6 +133,7 @@ class TrafficWatch:
         out: List[str] = []
         if not self.enough_data:
             return out
+        flagged = set()
         for label, seen, calibrated in (("prompts", _median(self.prompt_tokens), self.calibrated_prompt),
                                         ("answers", _median(self.completion_tokens), self.calibrated_completion)):
             if seen is None or not calibrated:
@@ -136,8 +141,18 @@ class TrafficWatch:
             ratio = seen / calibrated
             if ratio >= WIDER_THAN or ratio <= NARROWER_THAN:
                 longer = "longer" if ratio > 1 else "shorter"
+                flagged.add(label)
                 out.append(f"{label} are {max(ratio, 1 / ratio):.1f}x {longer} than the profile was tuned for "
                            f"(median {seen:.0f} tokens against {calibrated})")
+        # A median that still matches can hide a tail that no longer does, and the long requests are the
+        # ones that breach a latency ceiling. Only the heavy side is worth saying, and only when the
+        # median said nothing, so one shift is never reported twice.
+        live_p90 = _percentile(self.prompt_tokens, 90)
+        if "prompts" not in flagged and live_p90 and self.calibrated_prompt_p90:
+            ratio = live_p90 / self.calibrated_prompt_p90
+            if ratio >= WIDER_THAN:
+                out.append(f"the longest prompts are {ratio:.1f}x longer than the profile was tuned for "
+                           f"(p90 {live_p90:.0f} tokens against {self.calibrated_prompt_p90})")
         typical = _median(self.concurrency)
         if typical is not None and self.calibrated_concurrency:
             top = max(self.calibrated_concurrency)
@@ -162,7 +177,8 @@ class TrafficWatch:
             "requests_with_token_counts": len(self.completion_tokens),
             "enough_data": self.enough_data,
             "prompt_tokens": {"median": _median(self.prompt_tokens), "p90": _percentile(self.prompt_tokens, 90),
-                              "calibrated": self.calibrated_prompt},
+                              "calibrated": self.calibrated_prompt,
+                              "calibrated_p90": self.calibrated_prompt_p90},
             "completion_tokens": {"median": _median(self.completion_tokens),
                                   "p90": _percentile(self.completion_tokens, 90),
                                   "calibrated": self.calibrated_completion},
