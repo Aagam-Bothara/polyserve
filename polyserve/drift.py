@@ -5,9 +5,10 @@ itself when real traffic drifts away from that shape. The proxy feeds every requ
 says in one report whether what is being served still resembles what was measured, so `polyserve recalibrate`
 is a decision rather than a guess.
 
-Only what the backend already reports is counted: the `usage` block of non-streaming responses. Streamed replies
-are passed through byte-for-byte, so they count as requests and toward concurrency but carry no token counts; a
-purely streaming deployment therefore sees concurrency drift but not length drift. Nothing here reads prompt text.
+Only what the backend already reports is counted: the `usage` block, which non-streamed replies carry anyway and
+streamed ones carry because the proxy asks for it (`stream_options: {"include_usage": true}`). A caller who set
+`include_usage` themselves keeps their choice, and a backend that ignores the request answers without usage; those
+replies still count as requests and toward concurrency, but contribute no lengths. Nothing here reads prompt text.
 
 Served latency is watched the same way, for streamed replies only, and is reported rather than warned about,
 because a load spike breaches a ceiling through queueing and re-tuning would not fix that: see `latency_findings`.
