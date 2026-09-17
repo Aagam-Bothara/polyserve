@@ -4,13 +4,15 @@
 
 **PolyServe finds the fastest way to serve an LLM on your GPU and your traffic, then serves it behind an OpenAI-compatible API.** It measures real configurations — engine, weight precision, batch size, KV-cache type, speculative decoding — instead of guessing, because the settings that won changed on every card tried.
 
-| Llama 3.1 8B, held-out prompts | PolyServe | a fixed rule of thumb † | stock default |
-|---|---|---|---|
-| RTX 4090 | **1041 tok/s** | 667 (+56%) | SGLang 448 (+132%) |
-| A100 | **1155 tok/s** | 674 (+71%) | vLLM 726 (+59%) |
-| A40 | **506 tok/s** | 257 (+97%) | vLLM 262 (+93%) |
+**It beats a hand-tuned configuration by 56–97%**, which is the comparison that matters — not the one against untouched defaults.
 
-† fp8 weights and KV cache, a short context, batch 256: what an informed user sets without measuring. On both Ampere cards it was **slower than changing nothing**, because an fp8 KV cache costs throughput there. Percentages are PolyServe's lead; each row was measured on prompts held out of calibration, in the sessions detailed in [benchmarks](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md#llama-31-8b-on-four-gpus).
+| Llama 3.1 8B, held-out prompts | PolyServe | a fixed rule of thumb † | (stock defaults) |
+|---|---|---|---|
+| RTX 4090 | **1041 tok/s** | 667 — **+56%** | SGLang 448 |
+| A100 | **1155 tok/s** | 674 — **+71%** | vLLM 726 |
+| A40 | **506 tok/s** | 257 — **+97%** | vLLM 262 |
+
+† fp8 weights and KV cache, a short context, batch 256: what an informed engineer sets without measuring. That rule was **slower than changing nothing** on both Ampere cards, because an fp8 KV cache costs throughput there — which is the point: the settings that win move from card to card, so a rule that is right somewhere is wrong elsewhere. The stock column is context rather than a claim; nobody serious ships untouched defaults. Each row was measured on prompts held out of calibration ([full sessions](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md#llama-31-8b-on-four-gpus)).
 
 ## Results
 
@@ -20,6 +22,14 @@
 - **What the search order is worth: one win, one tie.** Given the same time, random sampling of the same space matched this staged search on all three 8B cards. On a 14B in fp8 on a 24 GB card the staged search won by 4.4% (385 against 369 tok/s); on the same card in the 7× larger space that includes 4-bit checkpoints, the two tied (1412 against 1416) even though random search was given less time ([the evidence](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md#qwen25-14b-where-memory-binds)). What staging reliably gives is the same answer every run, every strategy tried at least once, and a profile saying what each setting was worth — the gains come from measuring, not from the order.
 
 Every result, with methods, ablations, quality checks and limits: [docs/benchmarks.md](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/benchmarks.md).
+
+## How this differs from vLLM's auto-tune and AIConfigurator
+
+Not benchmarked against either — the comparison below is one of *kind*, not of measured results, and saying otherwise would be the overclaiming this project tries to avoid.
+
+- **vLLM's `auto_tune`** sweeps one engine's throughput knobs — batch size and batched-token budget — to find the best setting that still meets a latency target. Same spirit, narrower question: it tunes vLLM once you have already chosen vLLM, your weight precision and your decoding strategy. PolyServe treats the engine itself as a variable, alongside precision, KV-cache type and speculative decoding — the dimensions that carried almost all the gain here. On an RTX 4090 SGLang led the early trials and vLLM only overtook it once speculative decoding and a quantized cache were tried — tuning the early leader alone would have eliminated the eventual winner, and a single-engine sweep never sees the crossover at all.
+- **AIConfigurator** predicts good deployments analytically from a performance model, aimed at TensorRT-LLM, and answers sizing questions — how many GPUs, which parallelism — very cheaply because it does not launch anything. PolyServe measures instead, which costs 20–50 minutes per workload and is why its answers are specific to your prompts. We tried the analytical shortcut and kept it small for a reason: our own fitted predictor reaches a rank correlation of 0.88–0.94, enough to prune quantizations that cannot win, but it ranks the true winner at a median of 15th out of 25 measured configurations — so prediction is a filter here, never the decision ([why](https://github.com/Aagam-Bothara/polyserve/blob/main/docs/decisions.md)).
+- **What none of the three does** is prove the others wrong. The honest gap is that no one outside this project has run PolyServe, and we have not run their tools on our hardware.
 
 ## Quickstart
 
