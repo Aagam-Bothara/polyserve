@@ -19,5 +19,8 @@ COPY polyserve ./polyserve
 RUN pip install --no-cache-dir ".[nvml]"
 
 EXPOSE 8000
+# Inside a container, only a server listening on every interface can be reached through -p; outside one,
+# PolyServe listens on this machine alone. Publish with -p 127.0.0.1:8000:8000 to keep the container local too.
+ENV POLYSERVE_HOST=0.0.0.0
 ENTRYPOINT ["polyserve"]
 CMD ["--help"]

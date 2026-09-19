@@ -160,7 +160,7 @@ To see whether quantized weights cost quality on your model, run `benchmarks/tas
 ## CLI
 
 ```
-polyserve serve <model> [--objective X] [--workload W] [--workload-file F] [--phases MODE] [--power MODE] [--ttft-ceiling MS] [--ttft-percentile 95|50] [--tpot-ceiling MS] [--port N] [--backend NAME] [--skip-calibration]
+polyserve serve <model> [--objective X] [--workload W] [--workload-file F] [--phases MODE] [--power MODE] [--ttft-ceiling MS] [--ttft-percentile 95|50] [--tpot-ceiling MS] [--port N] [--host ADDR] [--backend NAME] [--skip-calibration]
                 [--quant auto|LIST] [--kv-quant on|off] [--prefix-cache on|off] [--speculative on|off] [--layout MODE] [--combine on|off] [--confirm on|off] [--all-levels] [--budget 10m]
 polyserve probe                 # print HardwareDescriptor
 polyserve workloads             # list workload presets
@@ -181,6 +181,8 @@ polyserve power reset           # undo a power cap or clock lock left behind by 
 ```
 
 To start serving without waiting for benchmarks, use `--skip-calibration`. This launches the first candidate backend with default settings and does not cache a profile.
+
+**Who can reach it.** `serve` listens on `127.0.0.1`, this machine only. PolyServe has no authentication, so `--host 0.0.0.0` puts the model and `/polyserve/profile` on every network the machine can reach, and the server says so when it starts; put an authenticating proxy in front of it before doing that. `POLYSERVE_HOST` sets the same thing, and the Docker image sets it to `0.0.0.0`, because inside a container that is the only address `-p` can reach; `-p 127.0.0.1:8000:8000` keeps a container local as well.
 
 **Traffic drift.** A profile is calibrated for one shape of work, and nothing re-tunes when real traffic stops looking like it. While serving, `GET /polyserve/drift` reports what is actually being served — median and p90 prompt and answer length, typical and peak concurrency — against the workload the profile was measured on, and names the differences in plain sentences ("prompts are 3.1x longer than the profile was tuned for"). The first time that happens the server also logs it once, suggesting `polyserve recalibrate`. Token counts come from the `usage` block backends already return, so nothing reads prompt text. Streamed replies carry no counts unless the request asks for them and most OpenAI clients stream, so the proxy adds `stream_options: {"include_usage": true}` to streaming requests on the way past and reads the final chunk; a caller who already set `stream_options` keeps their setting, and the extra chunk carries usage with an empty `choices`. The report says how many requests contributed counts. It needs 50 requests before it will call anything drift. Prompt lengths are judged against what calibration actually served — the profile records the p50, p90 and longest of its own prompts — rather than the nominal prefill, which for a `--workload-file` is only a cap; a tail that grows while the median holds still is reported on its own, since the long requests are the ones that breach a latency ceiling. Profiles written before those lengths were recorded fall back to the nominal prefill.
 

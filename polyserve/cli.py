@@ -774,6 +774,18 @@ def profiles(
     console.print(t)
 
 
+def _is_loopback(host: str) -> bool:
+    """True for an address only this machine can reach."""
+    import ipaddress
+
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False  # a hostname, which may well resolve to an address other machines reach
+
+
 @app.command()
 def serve(
     model: str,
@@ -781,7 +793,9 @@ def serve(
     workload: str = WORKLOAD_OPT,
     workload_file: Optional[Path] = WORKLOAD_FILE_OPT,
     port: int = typer.Option(8000, "--port"),
-    host: str = typer.Option("0.0.0.0", "--host"),
+    host: str = typer.Option("127.0.0.1", "--host", envvar="POLYSERVE_HOST",
+                             help="Address to listen on. The default is this machine only; 0.0.0.0 exposes the "
+                                  "server, which has no authentication, to every network it can reach"),
     backend: Optional[str] = typer.Option(None, "--backend", help="Force a backend by name"),
     skip_calibration: bool = typer.Option(False, "--skip-calibration", help="Serve with backend defaults"),
     ttft_ceiling: Optional[float] = TTFT_OPT,
@@ -864,6 +878,10 @@ def serve(
     signal.signal(signal.SIGTERM, lambda *_: (_shutdown(), sys.exit(0)))
     console.print(f"[bold green]PolyServe listening on http://{host}:{port}/v1[/]  "
                   f"(backend {profile.backend} on {upstream})")
+    if not _is_loopback(host):
+        err.print(f"[yellow]{host} is reachable from other machines, and PolyServe has no authentication: anyone "
+                  f"who can reach port {port} can use the model and read /polyserve/profile. Put an "
+                  f"authenticating proxy in front of it, or pass --host 127.0.0.1.[/]")
     try:
         uvicorn.run(app_, host=host, port=port, log_level="warning")
     finally:
